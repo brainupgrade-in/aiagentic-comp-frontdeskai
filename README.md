@@ -74,7 +74,7 @@ kubectl logs deployment/frontdeskai
 | `k8s/registry.yaml` | In-namespace container registry + PVC (ingress pre-created by admin) |
 | `k8s/secret.yaml` | GROQ_API_KEY and SECRET_KEY |
 | `k8s/deployment.yaml` | App deployment + 1Gi PVC for SQLite data |
-| `k8s/service.yaml` | NodePort service (port 30080) |
+| `k8s/service.yaml` | Service `app` (matches admin-managed ingress) |
 | `k8s/deploy.sh` | One-command deploy (registry + build + push + secret + app) |
 | `k8s/build-and-push.sh` | Rebuild and push image after code changes |
 
