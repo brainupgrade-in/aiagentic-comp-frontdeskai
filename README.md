@@ -105,5 +105,4 @@ kubectl logs deployment/frontdeskai
 ## Access
 
 - **Local:** http://localhost:8000
-- **Kubernetes:** http://NODE_IP:30080
-- **Sandbox app ingress:** https://mtvlabk8suN-app.brainupgrade.in
+- **Sandbox:** https://YOURNAMESPACE-app.brainupgrade.in
