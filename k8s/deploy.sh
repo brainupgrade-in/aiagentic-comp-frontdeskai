@@ -84,12 +84,12 @@ echo "==> Deploying application..."
 kubectl apply -f "${REPO_DIR}/k8s/deployment.yaml"
 kubectl apply -f "${REPO_DIR}/k8s/service.yaml"
 
-# 5b. Deploy ServiceMonitor if CRD exists (Prometheus Operator)
-if kubectl api-resources --api-group=monitoring.coreos.com 2>/dev/null | grep -q servicemonitors; then
-  echo "==> Deploying ServiceMonitor..."
-  kubectl apply -f "${REPO_DIR}/k8s/servicemonitor.yaml"
+# 5b. Deploy ServiceMonitor if CRD exists and user has permissions
+if kubectl apply -f "${REPO_DIR}/k8s/servicemonitor.yaml" 2>/dev/null; then
+  echo "==> ServiceMonitor deployed"
 else
-  echo "==> ServiceMonitor CRD not found, skipping (Prometheus will use pod annotations)"
+  echo "==> ServiceMonitor skipped (CRD not found or insufficient permissions)"
+  echo "    Prometheus will use pod annotations instead"
 fi
 
 # 6. Wait and verify
