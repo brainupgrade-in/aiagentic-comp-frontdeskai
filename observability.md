@@ -185,23 +185,116 @@ from observability import get_metrics_app
 app.mount("/metrics", get_metrics_app())
 ```
 
+## Optimizations & Known Pitfalls
+
+### Python Module Import — Stale Counter References
+
+**Bug**: Importing OTel counter variables at module load time captures `None` because `init_observability()` hasn't run yet.
+
+```python
+# BROKEN — captures None at import time, stays None forever
+from observability import category_counter, escalation_counter, request_duration
+
+# In request handler:
+if category_counter:        # Always False — still None
+    category_counter.add(1) # Never executes
+```
+
+**Fix**: Import the module and access counters as live attributes:
+
+```python
+# CORRECT — attribute lookup at call time gets the real counter
+import observability as obs
+
+# In request handler:
+if obs.category_counter:        # True after init_observability()
+    obs.category_counter.add(1) # Works
+```
+
+This applies to all module-level variables set during `init_observability()`: `category_counter`, `escalation_counter`, `fallback_counter`, `error_counter`, `request_duration`, `logger`.
+
+### OTel Histogram Bucket Boundaries
+
+OTel's default histogram boundaries are `[0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000]` (milliseconds for duration instruments). For **seconds-based** duration histograms like `frontdeskai_request_duration_seconds`, these translate to boundaries at 0s, 5s, 10s, 25s... which are far too coarse for sub-second LLM calls.
+
+**Impact on dashboards**:
+- `histogram_quantile(0.95, ...)` returns NaN or misleading values
+- All requests fall in the `le="5"` bucket, giving no granularity
+
+**Dashboard workaround**: Use `sum/count` average instead of percentiles:
+```promql
+sum(metric_sum{...}) / clamp_min(sum(metric_count{...}), 1)
+```
+
+**Proper fix** (if needed): Configure explicit bucket boundaries in `observability.py`:
+```python
+from opentelemetry.sdk.metrics.view import View, ExplicitBucketHistogramAggregation
+
+view = View(
+    instrument_name="frontdeskai_request_duration_seconds",
+    aggregation=ExplicitBucketHistogramAggregation(
+        boundaries=[0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0]
+    ),
+)
+```
+
+### Prometheus Scrape Annotations
+
+Annotations must be on the **pod template**, not the Deployment metadata:
+
+```bash
+kubectl patch deployment frontdeskai -n <NAMESPACE> --type=merge -p '{
+  "spec": {"template": {"metadata": {"annotations": {
+    "prometheus.io/scrape": "true",
+    "prometheus.io/port": "8000",
+    "prometheus.io/path": "/metrics"
+  }}}}
+}'
+```
+
+Without these annotations, Prometheus will not discover or scrape the `/metrics` endpoint, even though the app exposes it correctly.
+
+### OTLP Exporter — Insecure Mode
+
+The `OTLPSpanExporter` must be configured with `insecure=True` for in-cluster communication to Tempo (no TLS):
+
+```python
+otlp_exporter = OTLPSpanExporter(
+    endpoint=os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT",
+                            "http://tempo.monitoring.svc.cluster.local:4317"),
+    insecure=True
+)
+```
+
+Without `insecure=True`, the exporter attempts TLS and fails silently — traces are dropped with no error in app logs.
+
+### BatchSpanProcessor Flush
+
+`BatchSpanProcessor` batches spans and flushes periodically (default: every 5 seconds, or when batch reaches 512 spans). For low-traffic training apps:
+- Traces may take up to 5 seconds to appear in Tempo after a request completes
+- On graceful shutdown, `TracerProvider.shutdown()` flushes remaining spans — but container kill signals may not allow enough time
+- For debugging, set `OTEL_BSP_SCHEDULE_DELAY=1000` to flush every second
+
 ## Grafana Dashboard
 
 A dedicated dashboard **"Distributed Tracing - FrontDesk AI"** is available in Grafana.
 
-**Panels:**
+**Panels (top to bottom):**
 
-| Panel | Data Source | Description |
-|-------|------------|-------------|
-| Trace Search | Tempo | Recent traces table with clickable trace IDs |
-| Request Duration p50/p95/p99 | Prometheus | End-to-end latency percentiles |
-| LLM Call Duration by Agent | Prometheus | Per-agent LLM latency (p95) |
-| Request Rate | Prometheus | Requests per second by category |
-| Token Usage by Agent | Prometheus | Token consumption rate by agent |
-| Escalations & Errors | Prometheus | Escalation, fallback, and error rates |
-| Category Distribution | Prometheus | Donut chart of request categories |
-| Total Tokens / Requests / Escalations / Errors | Prometheus | Stat panels |
-| Correlated Logs | Loki | JSON logs filtered by trace_id |
+| Panel | Type | Data Source | Description |
+|-------|------|------------|-------------|
+| Avg Request Duration | Bar Gauge | Prometheus | Avg request + LLM call duration (instant query, `sum/count`) |
+| Avg LLM Duration by Agent | Bar Gauge | Prometheus | Per-agent LLM latency breakdown |
+| Requests by Category | Bar Gauge | Prometheus | Cumulative request count per category |
+| Tokens by Agent | Bar Gauge | Prometheus | Cumulative token consumption per agent |
+| Request Activity | Time Series | Prometheus | Category counter over time (cumulative) |
+| Token Accumulation | Time Series | Prometheus | Token counter over time (cumulative) |
+| Category Distribution | Pie Chart | Prometheus | Donut chart of request categories |
+| Total Tokens / Requests / Escalations / Errors | Stat | Prometheus | Summary stat panels |
+| All Application Logs | Logs | Loki | JSON logs filtered by `trace_id != "0"` |
+| Recent Traces | Table | Loki | One row per trace with clickable Trace ID → Tempo Explore |
+
+**Note**: The Recent Traces panel uses Loki (not Tempo TraceQL) due to a Grafana 12.x gRPC streaming limitation with Tempo's HTTP API. Trace IDs are clickable data links that open the full trace waterfall in Grafana Explore via Tempo.
 
 ## Verifying the Setup
 
