@@ -16,7 +16,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 from agents import build_graph, SupportRequest
 import observability as obs
-from observability import init_observability, get_metrics_app, get_tracer
+from observability import init_observability, get_metrics_app, get_tracer, get_langfuse_handler
 
 load_dotenv()
 
@@ -193,6 +193,11 @@ async def send_message(request: Request, message: str = Form(...)):
         with SqliteSaver.from_conn_string(CHECKPOINT_DB) as checkpointer:
             compiled = graph.compile(checkpointer=checkpointer)
             config = {"configurable": {"thread_id": user}}
+
+            # Attach Langfuse callback if configured
+            lf_handler = get_langfuse_handler(user_id=user, session_id=user)
+            if lf_handler:
+                config["callbacks"] = [lf_handler]
 
             initial_state = {
                 "employee_name": employee_name,

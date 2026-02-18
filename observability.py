@@ -1,4 +1,4 @@
-"""Centralized OpenTelemetry observability: metrics, tracing, structured logging."""
+"""Centralized OpenTelemetry observability: metrics, tracing, structured logging, Langfuse."""
 
 import json
 import logging
@@ -16,6 +16,8 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.trace import StatusCode
 from prometheus_client import make_asgi_app
+
+from langfuse.callback import CallbackHandler as LangfuseCallbackHandler
 
 
 # ── JSON Log Formatter ──────────────────────────────────────────────
@@ -63,12 +65,15 @@ fallback_counter = None
 agent_error_counter = None
 request_duration = None
 
+# Langfuse
+langfuse_enabled = False
+
 logger = logging.getLogger("frontdeskai")
 
 
 def init_observability():
     """Initialize OTel tracing, Prometheus metrics, and JSON logging."""
-    global _tracer, _meter
+    global _tracer, _meter, langfuse_enabled
     global llm_call_duration, llm_tokens_total, category_counter
     global escalation_counter, fallback_counter, agent_error_counter, request_duration
 
@@ -129,6 +134,16 @@ def init_observability():
     log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
     root.setLevel(getattr(logging, log_level, logging.INFO))
 
+    # Langfuse — enabled only when all three env vars are set
+    lf_secret = os.environ.get("LANGFUSE_SECRET_KEY", "")
+    lf_public = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
+    lf_host = os.environ.get("LANGFUSE_HOST", "")
+    if lf_secret and lf_public and lf_host:
+        langfuse_enabled = True
+        root.info("Langfuse enabled", extra={"langfuse_host": lf_host})
+    else:
+        root.info("Langfuse disabled (LANGFUSE_SECRET_KEY/PUBLIC_KEY/HOST not set)")
+
     root.info("Observability initialized")
 
 
@@ -179,6 +194,20 @@ def trace_llm_call(agent_name: str):
                 exc_info=True,
             )
             raise
+
+
+def get_langfuse_handler(user_id: str = "", session_id: str = ""):
+    """Create a Langfuse callback handler for a single request.
+
+    Returns None if Langfuse is not configured.
+    Each invocation creates a fresh handler so traces are grouped per request.
+    """
+    if not langfuse_enabled:
+        return None
+    return LangfuseCallbackHandler(
+        user_id=user_id,
+        session_id=session_id,
+    )
 
 
 def get_metrics_app():

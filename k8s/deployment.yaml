@@ -34,6 +34,25 @@ spec:
                 secretKeyRef:
                   name: frontdeskai-secret
                   key: SECRET_KEY
+            # Langfuse config
+            - name: LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: frontdeskai-secret
+                  key: LANGFUSE_SECRET_KEY
+                  optional: true
+            - name: LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: frontdeskai-secret
+                  key: LANGFUSE_PUBLIC_KEY
+                  optional: true
+            - name: LANGFUSE_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: frontdeskai-secret
+                  key: LANGFUSE_HOST
+                  optional: true
             # Observability config
             - name: OTEL_SERVICE_NAME
               value: "frontdeskai"
