@@ -8,6 +8,11 @@ spec:
   selector:
     app: frontdeskai
   ports:
-    - protocol: TCP
+    - name: http
+      protocol: TCP
       port: 80
+      targetPort: 8000
+    - name: metrics
+      protocol: TCP
+      port: 9090
       targetPort: 8000

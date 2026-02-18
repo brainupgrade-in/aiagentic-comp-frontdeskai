@@ -10,6 +10,8 @@ load_dotenv()
 from langchain_groq import ChatGroq
 from langgraph.graph import StateGraph, START, END
 
+from observability import trace_llm_call
+
 llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
 
 
@@ -40,7 +42,9 @@ def supervisor(state: SupportRequest) -> dict:
         f"Reply:\nCATEGORY: ...\nCONFIDENCE: ..."
     )
     try:
-        response = llm.invoke(prompt)
+        with trace_llm_call("supervisor") as ctx:
+            response = llm.invoke(prompt)
+            ctx["response"] = response
         text = response.content.lower()
         category = "general"
         confidence = 5
@@ -101,7 +105,9 @@ def hr_worker(state: SupportRequest) -> dict:
         f"add on a new line: ESCALATE: <reason>"
     )
     try:
-        response = llm.invoke(prompt)
+        with trace_llm_call("hr_worker") as ctx:
+            response = llm.invoke(prompt)
+            ctx["response"] = response
         text = response.content.strip()
         escalate = False
         reason = ""
@@ -133,7 +139,9 @@ def tech_worker(state: SupportRequest) -> dict:
         f"If this is P1 severity (production down, data loss), add: ESCALATE: <reason>"
     )
     try:
-        response = llm.invoke(prompt)
+        with trace_llm_call("tech_worker") as ctx:
+            response = llm.invoke(prompt)
+            ctx["response"] = response
         text = response.content.strip()
         escalate = False
         reason = ""
@@ -164,7 +172,9 @@ def finance_worker(state: SupportRequest) -> dict:
         f"Reply helpfully in 2-3 sentences."
     )
     try:
-        response = llm.invoke(prompt)
+        with trace_llm_call("finance_worker") as ctx:
+            response = llm.invoke(prompt)
+            ctx["response"] = response
         return {
             "worker_output": response.content.strip(),
             "needs_escalation": False,
@@ -185,7 +195,9 @@ def facilities_worker(state: SupportRequest) -> dict:
         f"Reply helpfully in 2-3 sentences."
     )
     try:
-        response = llm.invoke(prompt)
+        with trace_llm_call("facilities_worker") as ctx:
+            response = llm.invoke(prompt)
+            ctx["response"] = response
         return {
             "worker_output": response.content.strip(),
             "needs_escalation": False,
@@ -235,7 +247,9 @@ def manager_agent(state: SupportRequest) -> dict:
         f"Provide a definitive answer with your authority. 2-3 sentences."
     )
     try:
-        response = llm.invoke(prompt)
+        with trace_llm_call("manager") as ctx:
+            response = llm.invoke(prompt)
+            ctx["response"] = response
         return {
             "worker_output": f"[Manager Review] {response.content.strip()}",
             "error": "",

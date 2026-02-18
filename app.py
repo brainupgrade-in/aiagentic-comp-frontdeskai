@@ -2,18 +2,24 @@
 
 import os
 import sqlite3
+import time
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 
 import jwt
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, Form, HTTPException, Depends
+from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 from agents import build_graph, SupportRequest
+from observability import (
+    init_observability, get_metrics_app, get_tracer,
+    category_counter, escalation_counter, fallback_counter, request_duration,
+    logger as obs_logger,
+)
 
 load_dotenv()
 
@@ -79,10 +85,14 @@ graph = build_graph()
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
+    init_observability()
+    obs_logger.info("FrontDesk AI starting up")
     yield
+    obs_logger.info("FrontDesk AI shutting down")
 
 
 app = FastAPI(title="FrontDesk AI", lifespan=lifespan)
+app.mount("/metrics", get_metrics_app())
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
@@ -163,6 +173,9 @@ async def send_message(request: Request, message: str = Form(...)):
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
+    start = time.monotonic()
+    tracer = get_tracer()
+
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     # Save user message
@@ -176,34 +189,58 @@ async def send_message(request: Request, message: str = Form(...)):
     # Extract employee name from email
     employee_name = user.split("@")[0].replace(".", " ").title()
 
-    # Run the multi-agent graph with SQLite checkpointer
-    with SqliteSaver.from_conn_string(CHECKPOINT_DB) as checkpointer:
-        compiled = graph.compile(checkpointer=checkpointer)
-        config = {"configurable": {"thread_id": user}}
+    with tracer.start_as_current_span("chat.send") as span:
+        span.set_attribute("user.email", user)
 
-        initial_state = {
-            "employee_name": employee_name,
-            "request": message,
-            "category": "",
-            "confidence": 0,
-            "worker_output": "",
-            "needs_escalation": False,
-            "escalation_reason": "",
-            "error": "",
-            "fallback_used": False,
-            "final_response": "",
-            "audit": [],
-        }
+        # Run the multi-agent graph with SQLite checkpointer
+        with SqliteSaver.from_conn_string(CHECKPOINT_DB) as checkpointer:
+            compiled = graph.compile(checkpointer=checkpointer)
+            config = {"configurable": {"thread_id": user}}
 
-        result = compiled.invoke(initial_state, config)
+            initial_state = {
+                "employee_name": employee_name,
+                "request": message,
+                "category": "",
+                "confidence": 0,
+                "worker_output": "",
+                "needs_escalation": False,
+                "escalation_reason": "",
+                "error": "",
+                "fallback_used": False,
+                "final_response": "",
+                "audit": [],
+            }
 
-    category = result.get("category", "")
-    confidence = result.get("confidence", 0)
-    escalated = result.get("needs_escalation", False)
-    fallback_used = result.get("fallback_used", False)
-    final_response = result.get("final_response", "Something went wrong.")
-    audit = result.get("audit", [])
-    audit_str = "||".join(audit)
+            result = compiled.invoke(initial_state, config)
+
+        category = result.get("category", "")
+        confidence = result.get("confidence", 0)
+        escalated = result.get("needs_escalation", False)
+        fallback_used = result.get("fallback_used", False)
+        final_response = result.get("final_response", "Something went wrong.")
+        audit = result.get("audit", [])
+        audit_str = "||".join(audit)
+
+        span.set_attribute("chat.category", category)
+        span.set_attribute("chat.confidence", confidence)
+        span.set_attribute("chat.escalated", escalated)
+
+        # Record metrics
+        if category_counter:
+            category_counter.add(1, {"category": category})
+        if escalated and escalation_counter:
+            escalation_counter.add(1, {"category": category})
+        if fallback_used and fallback_counter:
+            fallback_counter.add(1, {"category": category})
+
+        elapsed = time.monotonic() - start
+        if request_duration:
+            request_duration.record(elapsed)
+
+        obs_logger.info(
+            "Chat request processed",
+            extra={"category": category, "employee": user, "duration_ms": round(elapsed * 1000, 1)},
+        )
 
     # Save assistant response
     conn.execute(
