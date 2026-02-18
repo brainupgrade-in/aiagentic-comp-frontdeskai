@@ -281,7 +281,7 @@ Without `insecure=True`, the exporter attempts TLS and fails silently — traces
 
 ## Grafana Dashboard
 
-A dedicated dashboard **"Distributed Tracing - FrontDesk AI"** is available in Grafana.
+A dedicated dashboard **"Agentic AI Observability"** is available in Grafana (`aiagentic-comp` folder).
 
 **Panels (top to bottom):**
 
