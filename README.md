@@ -41,25 +41,26 @@ python app.py
 
 ## Build & Deploy on Kubernetes (Sandbox)
 
-This project is designed to run inside a Cloud Lab sandbox environment on an **AWS EKS** cluster. Each participant has their own namespace (`mtvlabk8suN`) with a private in-cluster container registry exposed via Ingress with TLS — no external registry (Docker Hub, ECR) is needed.
-
-### Step 1: Create the secret with your API key
+This project is designed to run inside a Cloud Lab sandbox environment on an **AWS EKS** cluster. Each participant has their own namespace with a private in-cluster container registry — no external registry (Docker Hub, ECR) is needed.
 
 ```bash
-# Edit k8s/secret.yaml and set your GROQ_API_KEY
-kubectl apply -f k8s/secret.yaml
+git clone https://github.com/brainupgrade-in/aiagentic-comp-frontdeskai.git
+cd aiagentic-comp-frontdeskai
+bash k8s/deploy.sh YOUR_GROQ_API_KEY
 ```
 
-### Step 2: Build, push, and deploy
+This single command auto-detects your namespace, deploys a private registry, builds and pushes the image, creates the secret, and deploys the app.
 
-The script auto-detects your namespace from `kubectl config get-contexts`, builds the image, pushes it to your private registry, and updates the manifests:
+See [participant-instructions.md](participant-instructions.md) for the full guide.
+
+### Redeploy After Code Changes
 
 ```bash
 bash k8s/build-and-push.sh
-kubectl apply -f k8s/
+kubectl rollout restart deployment/frontdeskai
 ```
 
-### Step 3: Verify
+### Verify
 
 ```bash
 kubectl get pods -l app=frontdeskai
@@ -74,7 +75,8 @@ kubectl logs deployment/frontdeskai
 | `k8s/secret.yaml` | GROQ_API_KEY and SECRET_KEY |
 | `k8s/deployment.yaml` | App deployment + 1Gi PVC for SQLite data |
 | `k8s/service.yaml` | NodePort service (port 30080) |
-| `k8s/build-and-push.sh` | Build and push image to the per-user registry |
+| `k8s/deploy.sh` | One-command deploy (registry + build + push + secret + app) |
+| `k8s/build-and-push.sh` | Rebuild and push image after code changes |
 
 ## Project Structure
 
