@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FrontDesk AI — Chat</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="chat-body">
+    <header class="chat-header">
+        <div class="header-left">
+            <svg width="32" height="32" viewBox="0 0 48 48" fill="none">
+                <rect width="48" height="48" rx="12" fill="#6366f1"/>
+                <path d="M14 16h20v2H14zm0 6h16v2H14zm0 6h12v2H14zm0 6h8v2H14z" fill="white"/>
+                <circle cx="36" cy="32" r="6" fill="#22d3ee"/>
+                <path d="M34 32l2 2 3-3" stroke="white" stroke-width="1.5" fill="none"/>
+            </svg>
+            <span class="header-title">FrontDesk AI</span>
+        </div>
+        <div class="header-right">
+            <span class="user-badge">{{ user }}</span>
+            <a href="/logout" class="btn-logout">Logout</a>
+        </div>
+    </header>
+
+    <main class="chat-main">
+        <div class="chat-messages" id="chatMessages">
+            {% if not messages %}
+            <div class="welcome-message">
+                <h2>Welcome to FrontDesk AI</h2>
+                <p>Your AI-powered employee support desk. Ask about:</p>
+                <div class="category-chips">
+                    <span class="chip chip-hr">HR & Leave</span>
+                    <span class="chip chip-tech">IT Support</span>
+                    <span class="chip chip-finance">Finance</span>
+                    <span class="chip chip-facilities">Facilities</span>
+                </div>
+                <div class="example-queries">
+                    <button class="example-btn" onclick="setMessage('I want to apply for 5 days casual leave from next Monday')">Apply for casual leave</button>
+                    <button class="example-btn" onclick="setMessage('The production database is running very slow and queries are timing out')">Report production issue</button>
+                    <button class="example-btn" onclick="setMessage('When will my travel expense reimbursement be credited?')">Expense reimbursement</button>
+                    <button class="example-btn" onclick="setMessage('I need a standing desk and a parking spot')">Facilities request</button>
+                </div>
+            </div>
+            {% endif %}
+
+            {% for msg in messages %}
+            <div class="message message-{{ msg.role }}">
+                <div class="message-content">
+                    <div class="message-text">{{ msg.content }}</div>
+                    {% if msg.role == 'assistant' %}
+                    <div class="message-meta">
+                        {% if msg.category %}
+                        <span class="meta-badge badge-{{ msg.category }}">{{ msg.category | upper }}</span>
+                        {% endif %}
+                        {% if msg.confidence %}
+                        <span class="meta-item">Confidence: {{ msg.confidence }}/10</span>
+                        {% endif %}
+                        {% if msg.escalated %}
+                        <span class="meta-badge badge-escalated">Escalated</span>
+                        {% endif %}
+                        {% if msg.fallback_used %}
+                        <span class="meta-badge badge-fallback">Fallback</span>
+                        {% endif %}
+                        {% if msg.audit %}
+                        <button class="audit-toggle" onclick="this.nextElementSibling.classList.toggle('hidden')">Audit Trail</button>
+                        <div class="audit-trail hidden">
+                            {% for entry in msg.audit %}
+                            <div class="audit-entry">{{ entry }}</div>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="message-time">{{ msg.created_at }}</div>
+            </div>
+            {% endfor %}
+        </div>
+    </main>
+
+    <footer class="chat-input-area">
+        <form id="chatForm" onsubmit="sendMessage(event)">
+            <div class="input-wrapper">
+                <textarea id="messageInput" name="message" placeholder="Describe your support request..." rows="1" required></textarea>
+                <button type="submit" id="sendBtn" class="btn-send">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                </button>
+            </div>
+        </form>
+    </footer>
+
+    <script>
+        const chatMessages = document.getElementById('chatMessages');
+        const messageInput = document.getElementById('messageInput');
+        const sendBtn = document.getElementById('sendBtn');
+
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+
+        function setMessage(text) {
+            messageInput.value = text;
+            messageInput.focus();
+        }
+
+        messageInput.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+        });
+
+        messageInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                document.getElementById('chatForm').dispatchEvent(new Event('submit'));
+            }
+        });
+
+        async function sendMessage(e) {
+            e.preventDefault();
+            const message = messageInput.value.trim();
+            if (!message) return;
+
+            // Remove welcome message
+            const welcome = document.querySelector('.welcome-message');
+            if (welcome) welcome.remove();
+
+            // Show user message
+            appendMessage('user', message);
+            messageInput.value = '';
+            messageInput.style.height = 'auto';
+
+            // Show loading
+            const loadingId = showLoading();
+
+            sendBtn.disabled = true;
+
+            try {
+                const formData = new FormData();
+                formData.append('message', message);
+
+                const res = await fetch('/chat/send', {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                if (res.status === 401) {
+                    window.location.href = '/login';
+                    return;
+                }
+
+                const data = await res.json();
+                removeLoading(loadingId);
+                appendAssistantMessage(data);
+            } catch (err) {
+                removeLoading(loadingId);
+                appendMessage('assistant', 'Something went wrong. Please try again.');
+            } finally {
+                sendBtn.disabled = false;
+            }
+        }
+
+        function appendMessage(role, text) {
+            const div = document.createElement('div');
+            div.className = `message message-${role}`;
+            div.innerHTML = `
+                <div class="message-content">
+                    <div class="message-text">${escapeHtml(text)}</div>
+                </div>
+            `;
+            chatMessages.appendChild(div);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function appendAssistantMessage(data) {
+            const div = document.createElement('div');
+            div.className = 'message message-assistant';
+
+            let metaHtml = '';
+            if (data.category) {
+                metaHtml += `<span class="meta-badge badge-${data.category}">${data.category.toUpperCase()}</span>`;
+            }
+            if (data.confidence) {
+                metaHtml += `<span class="meta-item">Confidence: ${data.confidence}/10</span>`;
+            }
+            if (data.escalated) {
+                metaHtml += `<span class="meta-badge badge-escalated">Escalated</span>`;
+            }
+            if (data.fallback_used) {
+                metaHtml += `<span class="meta-badge badge-fallback">Fallback</span>`;
+            }
+
+            let auditHtml = '';
+            if (data.audit && data.audit.length) {
+                const entries = data.audit.map(e => `<div class="audit-entry">${escapeHtml(e)}</div>`).join('');
+                auditHtml = `
+                    <button class="audit-toggle" onclick="this.nextElementSibling.classList.toggle('hidden')">Audit Trail</button>
+                    <div class="audit-trail hidden">${entries}</div>
+                `;
+            }
+
+            div.innerHTML = `
+                <div class="message-content">
+                    <div class="message-text">${escapeHtml(data.response)}</div>
+                    <div class="message-meta">${metaHtml}${auditHtml}</div>
+                </div>
+            `;
+            chatMessages.appendChild(div);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        let loadingCounter = 0;
+        function showLoading() {
+            const id = 'loading-' + (++loadingCounter);
+            const div = document.createElement('div');
+            div.id = id;
+            div.className = 'message message-assistant loading';
+            div.innerHTML = `
+                <div class="message-content">
+                    <div class="typing-indicator">
+                        <span></span><span></span><span></span>
+                    </div>
+                    <div class="loading-text">Agents processing your request...</div>
+                </div>
+            `;
+            chatMessages.appendChild(div);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            return id;
+        }
+
+        function removeLoading(id) {
+            const el = document.getElementById(id);
+            if (el) el.remove();
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>
