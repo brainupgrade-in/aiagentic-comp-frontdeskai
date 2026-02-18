@@ -15,11 +15,8 @@ from fastapi.templating import Jinja2Templates
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 from agents import build_graph, SupportRequest
-from observability import (
-    init_observability, get_metrics_app, get_tracer,
-    category_counter, escalation_counter, fallback_counter, request_duration,
-    logger as obs_logger,
-)
+import observability as obs
+from observability import init_observability, get_metrics_app, get_tracer
 
 load_dotenv()
 
@@ -86,9 +83,9 @@ graph = build_graph()
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     init_observability()
-    obs_logger.info("FrontDesk AI starting up")
+    obs.logger.info("FrontDesk AI starting up")
     yield
-    obs_logger.info("FrontDesk AI shutting down")
+    obs.logger.info("FrontDesk AI shutting down")
 
 
 app = FastAPI(title="FrontDesk AI", lifespan=lifespan)
@@ -226,18 +223,18 @@ async def send_message(request: Request, message: str = Form(...)):
         span.set_attribute("chat.escalated", escalated)
 
         # Record metrics
-        if category_counter:
-            category_counter.add(1, {"category": category})
-        if escalated and escalation_counter:
-            escalation_counter.add(1, {"category": category})
-        if fallback_used and fallback_counter:
-            fallback_counter.add(1, {"category": category})
+        if obs.category_counter:
+            obs.category_counter.add(1, {"category": category})
+        if escalated and obs.escalation_counter:
+            obs.escalation_counter.add(1, {"category": category})
+        if fallback_used and obs.fallback_counter:
+            obs.fallback_counter.add(1, {"category": category})
 
         elapsed = time.monotonic() - start
-        if request_duration:
-            request_duration.record(elapsed)
+        if obs.request_duration:
+            obs.request_duration.record(elapsed)
 
-        obs_logger.info(
+        obs.logger.info(
             "Chat request processed",
             extra={"category": category, "employee": user, "duration_ms": round(elapsed * 1000, 1)},
         )
