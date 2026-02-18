@@ -5,8 +5,12 @@ import logging
 import time
 from contextlib import contextmanager
 
+import os
+
 from opentelemetry import trace, metrics
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.exporter.prometheus import PrometheusMetricReader
@@ -70,8 +74,11 @@ def init_observability():
 
     resource = Resource.create({"service.name": "frontdeskai"})
 
-    # Tracing
+    # Tracing with OTLP export to Tempo
     provider = TracerProvider(resource=resource)
+    otlp_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://tempo.monitoring.svc.cluster.local:4317")
+    otlp_exporter = OTLPSpanExporter(endpoint=otlp_endpoint, insecure=True)
+    provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
     trace.set_tracer_provider(provider)
     _tracer = trace.get_tracer("frontdeskai")
 
