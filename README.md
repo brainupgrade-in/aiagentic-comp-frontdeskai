@@ -71,7 +71,7 @@ kubectl logs deployment/frontdeskai
 
 | File | Description |
 |------|-------------|
-| `k8s/registry.yaml` | In-namespace container registry + PVC + Ingress (TLS) |
+| `k8s/registry.yaml` | In-namespace container registry + PVC (ingress pre-created by admin) |
 | `k8s/secret.yaml` | GROQ_API_KEY and SECRET_KEY |
 | `k8s/deployment.yaml` | App deployment + 1Gi PVC for SQLite data |
 | `k8s/service.yaml` | NodePort service (port 30080) |

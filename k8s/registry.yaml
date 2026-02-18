@@ -59,28 +59,3 @@ spec:
   ports:
     - port: 5000
       targetPort: 5000
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: registry
-  labels:
-    app: registry
-  annotations:
-    nginx.ingress.kubernetes.io/proxy-body-size: "0"
-spec:
-  ingressClassName: nginx
-  tls:
-    - hosts:
-        - YOURNAMESPACE-registry.brainupgrade.in
-  rules:
-    - host: YOURNAMESPACE-registry.brainupgrade.in
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: registry
-                port:
-                  number: 5000

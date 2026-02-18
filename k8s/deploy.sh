@@ -23,9 +23,9 @@ echo "==> Registry:  ${REGISTRY}"
 
 # 1. Update manifests with namespace
 echo "==> Updating manifests..."
-sed -i "s/YOURNAMESPACE/${NAMESPACE}/g" "${REPO_DIR}/k8s/deployment.yaml" "${REPO_DIR}/k8s/registry.yaml"
+sed -i "s/YOURNAMESPACE/${NAMESPACE}/g" "${REPO_DIR}/k8s/deployment.yaml"
 
-# 2. Deploy registry and wait
+# 2. Deploy registry (deployment + service + PVC only; ingress is pre-created by admin)
 echo "==> Deploying private registry..."
 kubectl apply -f "${REPO_DIR}/k8s/registry.yaml"
 kubectl wait --for=condition=ready pod -l app=registry --timeout=120s
