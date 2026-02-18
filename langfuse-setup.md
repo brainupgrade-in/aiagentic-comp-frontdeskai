@@ -290,6 +290,179 @@ kubectl rollout restart deployment/frontdeskai
 
 Or simply remove the `LANGFUSE_*` lines from `.env` and redeploy.
 
+## Use Case: Detecting an Infinite LLM Loop Before It Burns Thousands of Dollars
+
+### The Scenario
+
+A developer modifies the FrontDesk AI agent graph to add a "retry with better prompt" feature. The intent is simple: if `qa_check` fails, instead of falling back to a template response, re-route back to the worker agent with an improved prompt.
+
+The code change looks harmless:
+
+```python
+# BUGGY CODE — qa_check routes back to worker on failure instead of fallback
+def route_qa(state: SupportRequest) -> str:
+    if state["error"]:
+        return state["category"]  # retry the worker ← BUG
+    return "finalize"
+```
+
+```python
+# Graph edges (buggy)
+graph.add_conditional_edges("qa_check", route_qa, {
+    "finalize": "finalize",
+    "hr": "hr_worker",        # ← loops back
+    "tech": "tech_worker",    # ← loops back
+    "finance": "finance_worker",
+    "facilities": "facilities_worker",
+    "general": "general_worker",
+})
+```
+
+The problem: if the worker consistently produces output that fails QA (e.g., a prompt that always generates a response shorter than 20 characters), the graph enters an infinite cycle:
+
+```
+supervisor → hr_worker → escalation_check → qa_check → hr_worker → escalation_check → qa_check → hr_worker → ...
+                                                  ↑___________________________|
+```
+
+Each cycle makes **2 LLM calls** (worker + potentially manager). With Groq's llama-3.3-70b consuming ~500 tokens per call, the loop burns through tokens at an alarming rate.
+
+### The Cost Impact
+
+| Duration | Cycles | LLM Calls | Tokens | Cost (GPT-4 pricing*) |
+|----------|--------|-----------|--------|-----------------------|
+| 1 minute | ~60 | ~120 | ~60,000 | $1.80 |
+| 1 hour | ~3,600 | ~7,200 | ~3.6M | $108 |
+| Overnight (8 hrs) | ~28,800 | ~57,600 | ~28.8M | $864 |
+| Weekend (48 hrs) | ~172,800 | ~345,600 | ~172M | **$5,184** |
+
+*Groq is free-tier, but the same bug on GPT-4o ($5/1M input, $15/1M output) or Claude would cost thousands. This is a realistic production scenario.*
+
+Even on Groq's free tier, the loop would hit rate limits (30 req/min), causing the request to hang indefinitely and potentially blocking other users.
+
+### Without Langfuse: How the Bug Hides
+
+Traditional monitoring alone struggles to catch this:
+
+- **Prometheus metrics** show elevated `frontdeskai_llm_tokens_total` but the counter is cumulative — a gradual increase looks normal during active use
+- **Grafana dashboards** show the request duration spiking, but if nobody is watching the dashboard at that moment, the alert may not fire until the damage is done
+- **Application logs** (Loki) flood with repeated `LLM call completed` entries, but log volume alone doesn't clearly signal "this is a loop" — it could just be a busy period
+- **OTel traces** (Tempo) show a single span `chat.send` with many child spans, but you'd have to manually open the trace to notice the pattern
+
+The fundamental problem: **none of these tools show you that the same prompt is being sent to the same agent over and over**.
+
+### With Langfuse: Detection in Under 60 Seconds
+
+#### Step 1: Immediate Alert — Anomalous Generation Count
+
+On the Langfuse **Traces** page, you instantly see something wrong:
+
+```
+Normal trace:    3 generations, 847 tokens, 1.4s
+Normal trace:    2 generations, 523 tokens, 0.9s
+BUGGY trace:   147 generations, 73,500 tokens, 245s  ← stands out immediately
+```
+
+The generation count alone is a smoking gun. Normal FrontDesk AI requests produce 2-4 generations (supervisor + worker + optionally manager). **147 generations is impossible in a healthy graph.**
+
+#### Step 2: Root Cause in One Click — Prompt Repetition
+
+Click the anomalous trace. Langfuse shows the full generation chain:
+
+```
+Trace: "What is the leave policy?"  —  147 generations, 73,500 tokens
+│
+├── Generation 1: supervisor     (156 → 24 tokens)   "CATEGORY: hr, CONFIDENCE: 9"
+├── Generation 2: hr_worker      (189 → 12 tokens)   "Check HR portal."        ← too short!
+├── Generation 3: hr_worker      (189 → 14 tokens)   "Visit HR portal."        ← retry, still short
+├── Generation 4: hr_worker      (189 → 11 tokens)   "See HR policy."          ← retry, still short
+├── Generation 5: hr_worker      (189 → 13 tokens)   "Ask HR team."            ← retry, still short
+│   ... (142 more identical hr_worker calls)
+└── Generation 147: hr_worker    (189 → 12 tokens)   "Contact HR."             ← still looping
+```
+
+The root cause is immediately visible:
+1. **Same agent** (`hr_worker`) called 146 times in a row
+2. **Same prompt** sent every time (the worker prompt doesn't change between retries)
+3. **Output always fails QA** (< 20 characters) because the prompt says "Reply helpfully in 2-3 sentences" but certain edge-case inputs produce terse responses
+
+#### Step 3: Quantify the Blast Radius
+
+Langfuse **Metrics** tab shows:
+
+- **Token usage spike** at the exact timestamp
+- **Cost per trace** — this single trace consumed more tokens than the previous 100 traces combined
+- **User impact** — the affected user's session was blocked for 4+ minutes
+- **Model** — confirms it's `llama-3.3-70b-versatile` (if on a paid model, shows dollar cost)
+
+#### Step 4: Fix and Verify
+
+The fix is straightforward once you see the loop pattern:
+
+```python
+# FIXED — add a retry counter to prevent infinite loops
+MAX_RETRIES = 2
+
+def qa_check(state: SupportRequest) -> dict:
+    output = state["worker_output"]
+    retry_count = state.get("qa_retry_count", 0)
+
+    if len(output) < 20 and retry_count < MAX_RETRIES:
+        return {"error": "too short", "qa_retry_count": retry_count + 1}
+    elif len(output) < 20:
+        return {"error": "too short after retries"}  # goes to fallback
+    return {"error": ""}
+```
+
+Or better — keep the original safe design that routes QA failures to `fallback` (a static template), never back to the worker:
+
+```python
+# SAFE — the original FrontDesk AI design
+def route_qa(state: SupportRequest) -> str:
+    return "fallback" if state["error"] else "finalize"
+```
+
+After deploying the fix, send another test request and check Langfuse:
+
+```
+Fixed trace:     3 generations, 847 tokens, 1.4s  ← back to normal
+```
+
+### Key Langfuse Features That Enable This Detection
+
+| Feature | What It Shows | Why It Matters |
+|---------|---------------|---------------|
+| **Generation count per trace** | 147 vs normal 2-4 | Instantly flags runaway loops |
+| **Full prompt text** | Same prompt repeated 146 times | Confirms it's a loop, not diverse traffic |
+| **Full completion text** | Short responses that fail QA | Shows why the loop doesn't terminate |
+| **Token usage per trace** | 73,500 vs normal 500-800 | Quantifies the cost of the bug |
+| **Agent/model name per generation** | `hr_worker` called 146× | Pinpoints which agent is looping |
+| **Timeline view** | Generations stacked with ~1s gaps | Visual pattern of repetitive calls |
+| **Session grouping** | Only 1 user affected | Limits blast radius assessment |
+
+### Prevention Checklist
+
+After catching this bug, implement these safeguards:
+
+1. **LangGraph recursion limit** — set `compiled.invoke(state, config, recursion_limit=25)` to hard-cap graph steps
+2. **Langfuse alerts** — set up a webhook alert when generation count per trace exceeds 10
+3. **Token budget per request** — check cumulative tokens in `trace_llm_call()` and abort if threshold exceeded
+4. **No retry loops in agent graphs** — QA failures should go to `fallback`, never back to workers
+5. **Grafana alert on token rate** — `rate(frontdeskai_llm_tokens_total[1m]) > 1000` triggers PagerDuty
+
+### Summary
+
+| | Without Langfuse | With Langfuse |
+|--|-----------------|---------------|
+| **Time to detect** | Hours (maybe days if on weekends) | < 60 seconds |
+| **Root cause identification** | Read thousands of log lines, correlate spans | One click on the anomalous trace |
+| **Blast radius assessment** | Query Prometheus, estimate from counters | Exact token count and cost in UI |
+| **Cost of the bug (GPT-4, 8hrs)** | **$864** before anyone notices | **$1.80** (caught in first minute) |
+
+This is why Langfuse is essential for agentic AI systems: **traditional observability tells you something is wrong; Langfuse tells you exactly what the LLM is doing wrong and why**.
+
+---
+
 ## Troubleshooting
 
 ### "Langfuse disabled" in startup logs
