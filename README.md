@@ -43,49 +43,23 @@ python app.py
 
 This project is designed to run inside a Cloud Lab sandbox environment on an **AWS EKS** cluster. Each participant has their own namespace (`mtvlabk8suN`) with a private in-cluster container registry exposed via Ingress with TLS — no external registry (Docker Hub, ECR) is needed.
 
-### Step 1: Replace the namespace placeholder
-
-Replace `YOURNAMESPACE` with your actual namespace (e.g. `mtvlabk8su1`) in the manifest files:
-
-```bash
-sed -i 's/YOURNAMESPACE/mtvlabk8su1/g' k8s/deployment.yaml k8s/registry.yaml
-```
-
-### Step 2: Deploy the private registry
-
-```bash
-kubectl apply -f k8s/registry.yaml
-kubectl wait --for=condition=ready pod -l app=registry --timeout=60s
-```
-
-### Step 3: Build and push the container image
-
-```bash
-podman build -t mtvlabk8su1-registry.brainupgrade.in/frontdeskai:latest -f Containerfile .
-podman push mtvlabk8su1-registry.brainupgrade.in/frontdeskai:latest
-```
-
-Or use the helper script:
-
-```bash
-bash k8s/build-and-push.sh mtvlabk8su1
-```
-
-### Step 4: Create the secret with your API key
+### Step 1: Create the secret with your API key
 
 ```bash
 # Edit k8s/secret.yaml and set your GROQ_API_KEY
 kubectl apply -f k8s/secret.yaml
 ```
 
-### Step 5: Deploy the application
+### Step 2: Build, push, and deploy
+
+The script auto-detects your namespace from `kubectl config get-contexts`, builds the image, pushes it to your private registry, and updates the manifests:
 
 ```bash
-kubectl apply -f k8s/deployment.yaml
-kubectl apply -f k8s/service.yaml
+bash k8s/build-and-push.sh
+kubectl apply -f k8s/
 ```
 
-### Step 6: Verify
+### Step 3: Verify
 
 ```bash
 kubectl get pods -l app=frontdeskai
