@@ -5,11 +5,9 @@ metadata:
   labels:
     app: frontdeskai
 spec:
-  type: NodePort
   selector:
     app: frontdeskai
   ports:
     - protocol: TCP
       port: 80
       targetPort: 8000
-      nodePort: 30080
