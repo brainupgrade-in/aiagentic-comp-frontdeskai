@@ -72,7 +72,8 @@ def init_observability():
     global llm_call_duration, llm_tokens_total, category_counter
     global escalation_counter, fallback_counter, agent_error_counter, request_duration
 
-    resource = Resource.create({"service.name": "frontdeskai"})
+    service_name = os.environ.get("OTEL_SERVICE_NAME", "frontdeskai")
+    resource = Resource.create({"service.name": service_name})
 
     # Tracing with OTLP export to Tempo
     provider = TracerProvider(resource=resource)
@@ -125,7 +126,8 @@ def init_observability():
     root = logging.getLogger("frontdeskai")
     root.handlers.clear()
     root.addHandler(handler)
-    root.setLevel(logging.INFO)
+    log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+    root.setLevel(getattr(logging, log_level, logging.INFO))
 
     root.info("Observability initialized")
 

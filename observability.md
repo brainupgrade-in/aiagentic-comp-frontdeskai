@@ -126,7 +126,11 @@ prometheus-client==0.21.0
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `OTEL_SERVICE_NAME` | `frontdeskai` | Service name in traces and resource attributes |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://tempo.monitoring.svc.cluster.local:4317` | Tempo OTLP gRPC endpoint |
+| `LOG_LEVEL` | `INFO` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+
+All observability configuration is externalized via environment variables set in `k8s/deployment.yaml`. No observability endpoints or service names are hardcoded in the application code.
 
 ### Kubernetes Pod Annotations
 
