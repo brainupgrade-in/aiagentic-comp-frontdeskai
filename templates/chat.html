@@ -74,6 +74,16 @@
                             {% endfor %}
                         </div>
                         {% endif %}
+                        <div class="feedback-buttons" data-message-id="{{ msg.id }}">
+                            <button class="feedback-btn feedback-up{% if msg.feedback == 'up' %} feedback-active{% endif %}"
+                                    onclick="submitFeedback({{ msg.id }}, 'up', this)"
+                                    title="Helpful"
+                                    {% if msg.feedback %}disabled{% endif %}>&#x1F44D;</button>
+                            <button class="feedback-btn feedback-down{% if msg.feedback == 'down' %} feedback-active{% endif %}"
+                                    onclick="submitFeedback({{ msg.id }}, 'down', this)"
+                                    title="Not helpful"
+                                    {% if msg.feedback %}disabled{% endif %}>&#x1F44E;</button>
+                        </div>
                     </div>
                     {% endif %}
                 </div>
@@ -182,7 +192,7 @@
             div.className = 'message message-assistant';
 
             let metaHtml = '';
-            const safeCategories = ['hr','tech','finance','facilities','analytics','general'];
+            const safeCategories = ['hr','tech','finance','facilities','analytics','account','general'];
             if (data.category) {
                 const badgeCls = safeCategories.includes(data.category) ? data.category : 'general';
                 metaHtml += `<span class="meta-badge badge-${badgeCls}">${escapeHtml(data.category.toUpperCase())}</span>`;
@@ -215,11 +225,21 @@
                 `;
             }
 
+            let feedbackHtml = '';
+            if (data.message_id) {
+                feedbackHtml = `
+                    <div class="feedback-buttons" data-message-id="${data.message_id}">
+                        <button class="feedback-btn feedback-up" onclick="submitFeedback(${data.message_id}, 'up', this)" title="Helpful">&#x1F44D;</button>
+                        <button class="feedback-btn feedback-down" onclick="submitFeedback(${data.message_id}, 'down', this)" title="Not helpful">&#x1F44E;</button>
+                    </div>
+                `;
+            }
+
             div.innerHTML = `
                 <div class="message-content">
                     <div class="message-text">${escapeHtml(data.response)}</div>
                     ${sourcesHtml}
-                    <div class="message-meta">${metaHtml}${auditHtml}</div>
+                    <div class="message-meta">${metaHtml}${auditHtml}${feedbackHtml}</div>
                 </div>
             `;
             chatMessages.appendChild(div);
@@ -254,6 +274,31 @@
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        async function submitFeedback(messageId, feedback, btn) {
+            const container = btn.closest('.feedback-buttons');
+            const buttons = container.querySelectorAll('.feedback-btn');
+            buttons.forEach(b => b.disabled = true);
+
+            try {
+                const res = await fetch('/chat/feedback', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({message_id: messageId, feedback: feedback}),
+                });
+                if (res.ok) {
+                    // Clear any previous active state
+                    buttons.forEach(b => b.classList.remove('feedback-active'));
+                    // Set active on clicked button
+                    btn.classList.add('feedback-active');
+                } else {
+                    // Re-enable on error
+                    buttons.forEach(b => b.disabled = false);
+                }
+            } catch {
+                buttons.forEach(b => b.disabled = false);
+            }
         }
     </script>
 </body>

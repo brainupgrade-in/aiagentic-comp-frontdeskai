@@ -63,6 +63,28 @@ def get_history_db():
             created_at TEXT NOT NULL
         )"""
     )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS message_feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message_id INTEGER NOT NULL,
+            email TEXT NOT NULL,
+            feedback TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(message_id, email)
+        )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS fewshot_examples (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message_id INTEGER NOT NULL UNIQUE,
+            question TEXT NOT NULL,
+            answer TEXT NOT NULL,
+            category TEXT NOT NULL,
+            confidence INTEGER NOT NULL,
+            email TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )"""
+    )
     conn.commit()
     return conn
 
@@ -198,15 +220,18 @@ async def chat_page(request: Request):
 
     conn = get_history_db()
     rows = conn.execute(
-        "SELECT role, content, category, confidence, escalated, fallback_used, audit, created_at "
-        "FROM messages WHERE email = ? ORDER BY id ASC",
-        (user,),
+        "SELECT m.id, m.role, m.content, m.category, m.confidence, m.escalated, m.fallback_used, m.audit, m.created_at, "
+        "mf.feedback "
+        "FROM messages m LEFT JOIN message_feedback mf ON m.id = mf.message_id AND mf.email = ? "
+        "WHERE m.email = ? ORDER BY m.id ASC",
+        (user, user),
     ).fetchall()
     conn.close()
 
     messages = []
     for row in rows:
         messages.append({
+            "id": row["id"],
             "role": row["role"],
             "content": row["content"],
             "category": row["category"],
@@ -215,6 +240,7 @@ async def chat_page(request: Request):
             "fallback_used": bool(row["fallback_used"]),
             "audit": row["audit"].split("||") if row["audit"] else [],
             "created_at": row["created_at"],
+            "feedback": row["feedback"],
         })
 
     return templates.TemplateResponse("chat.html", {
@@ -289,6 +315,7 @@ async def send_message(request: Request, message: str = Form(...)):
                         "confidence": 0,
                         "rag_context": "",
                         "rag_sources": [],
+                        "fewshot_context": "",
                         "worker_output": "",
                         "needs_escalation": False,
                         "escalation_reason": "",
@@ -342,11 +369,12 @@ async def send_message(request: Request, message: str = Form(...)):
             )
 
         # Save assistant response
-        conn.execute(
+        cursor = conn.execute(
             "INSERT INTO messages (email, role, content, category, confidence, escalated, fallback_used, audit, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (user, "assistant", final_response, category, confidence, int(escalated), int(fallback_used), audit_str, now),
         )
+        message_id = cursor.lastrowid
         conn.commit()
     finally:
         conn.close()
@@ -357,6 +385,7 @@ async def send_message(request: Request, message: str = Form(...)):
         "confidence": confidence,
         "escalated": escalated,
         "fallback_used": fallback_used,
+        "message_id": message_id,
         "sources": result.get("rag_sources", []),
     }
     # Only expose internal details (audit trail, tool calls) to admins
@@ -365,6 +394,115 @@ async def send_message(request: Request, message: str = Form(...)):
         response_data["tool_calls"] = result.get("tool_calls_made", [])
 
     return response_data
+
+
+def _qualifies_for_fewshot(msg_row) -> bool:
+    """Check if a message qualifies to become a few-shot example."""
+    confidence = msg_row["confidence"] or 0
+    escalated = bool(msg_row["escalated"])
+    fallback_used = bool(msg_row["fallback_used"])
+    category = msg_row["category"] or ""
+    return (
+        confidence >= 7
+        and not escalated
+        and not fallback_used
+        and category not in ("", "general")
+    )
+
+
+def _add_fewshot_example(conn, msg_row, user: str) -> None:
+    """Extract preceding user question and store the Q&A pair as a few-shot example."""
+    from fewshot import add_example as fewshot_add
+
+    message_id = msg_row["id"]
+    answer = msg_row["content"]
+    category = msg_row["category"]
+    confidence = msg_row["confidence"]
+
+    # Find the preceding user message
+    user_msg = conn.execute(
+        "SELECT content FROM messages WHERE email = ? AND role = 'user' AND id < ? ORDER BY id DESC LIMIT 1",
+        (user, message_id),
+    ).fetchone()
+    if not user_msg:
+        return
+
+    question = user_msg["content"]
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    example_id = f"fewshot_{message_id}"
+
+    # Insert into SQLite
+    conn.execute(
+        "INSERT OR REPLACE INTO fewshot_examples (message_id, question, answer, category, confidence, email, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (message_id, question, answer, category, confidence, user, now),
+    )
+    conn.commit()
+
+    # Insert into ChromaDB
+    fewshot_add(example_id, question, answer, category, confidence)
+
+
+def _remove_fewshot_example(conn, message_id: int) -> None:
+    """Remove a few-shot example from both SQLite and ChromaDB."""
+    from fewshot import remove_example as fewshot_remove
+
+    conn.execute("DELETE FROM fewshot_examples WHERE message_id = ?", (message_id,))
+    conn.commit()
+    fewshot_remove(f"fewshot_{message_id}")
+
+
+@app.post("/chat/feedback", response_class=JSONResponse)
+@limiter.limit("30/minute")
+async def chat_feedback(request: Request):
+    """Submit thumbs up/down feedback on an assistant message."""
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    body = await request.json()
+    message_id = body.get("message_id")
+    feedback = body.get("feedback")
+
+    if feedback not in ("up", "down"):
+        raise HTTPException(status_code=400, detail="feedback must be 'up' or 'down'")
+    if not isinstance(message_id, int):
+        raise HTTPException(status_code=400, detail="message_id must be an integer")
+
+    conn = get_history_db()
+    try:
+        # Validate: message exists, belongs to user, is assistant role
+        msg = conn.execute(
+            "SELECT id, role, email, content, category, confidence, escalated, fallback_used FROM messages WHERE id = ?",
+            (message_id,),
+        ).fetchone()
+        if not msg:
+            raise HTTPException(status_code=404, detail="Message not found")
+        if msg["email"] != user:
+            raise HTTPException(status_code=403, detail="Not your message")
+        if msg["role"] != "assistant":
+            raise HTTPException(status_code=400, detail="Can only rate assistant messages")
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # Upsert feedback
+        conn.execute(
+            "INSERT INTO message_feedback (message_id, email, feedback, created_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(message_id, email) DO UPDATE SET feedback = excluded.feedback, created_at = excluded.created_at",
+            (message_id, user, feedback, now),
+        )
+        conn.commit()
+
+        # Few-shot memory management
+        if feedback == "up" and _qualifies_for_fewshot(msg):
+            _add_fewshot_example(conn, msg, user)
+        elif feedback == "down":
+            _remove_fewshot_example(conn, message_id)
+    finally:
+        conn.close()
+
+    return {"status": "ok"}
 
 
 ADMIN_EMAILS = set(

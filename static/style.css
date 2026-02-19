@@ -326,6 +326,44 @@ body {
     color: var(--text-secondary);
 }
 
+/* Feedback Buttons */
+.feedback-buttons {
+    display: inline-flex;
+    gap: 4px;
+    margin-left: auto;
+}
+
+.feedback-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    opacity: 0.4;
+    padding: 2px 6px;
+    border-radius: 6px;
+    transition: opacity 0.2s, background 0.2s;
+    line-height: 1;
+}
+
+.feedback-btn:hover:not(:disabled) {
+    opacity: 1;
+    background: rgba(255,255,255,0.08);
+}
+
+.feedback-btn:disabled {
+    cursor: default;
+}
+
+.feedback-up.feedback-active {
+    opacity: 1;
+    color: var(--green);
+}
+
+.feedback-down.feedback-active {
+    opacity: 1;
+    color: var(--red);
+}
+
 /* Audit Trail */
 .audit-toggle {
     background: none;

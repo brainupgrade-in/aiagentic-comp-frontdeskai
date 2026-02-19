@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from observability import trace_llm_call
 from rag import retrieve, format_context, format_sources
+from fewshot import retrieve_examples, format_fewshot_context
 from tools import DOMAIN_TOOLS
 
 llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
@@ -60,6 +61,7 @@ class SupportRequest(TypedDict):
     confidence: int
     rag_context: str        # retrieved policy text injected into worker prompts
     rag_sources: list[str]  # source citations from RAG retrieval
+    fewshot_context: str    # few-shot examples from successful past interactions
     worker_output: str
     needs_escalation: bool
     escalation_reason: str
@@ -195,6 +197,32 @@ def rag_retrieval(state: SupportRequest) -> dict:
         }
 
 
+# --- Few-Shot Retrieval Node ---
+
+def fewshot_retrieval(state: SupportRequest) -> dict:
+    """Retrieve similar successful Q&A examples for the current category."""
+    ts = datetime.now().strftime("%H:%M:%S")
+    category = state.get("category") or ""
+    if not category or category == "general":
+        return {"fewshot_context": "", "audit": [f"[{ts}] Few-shot: skipped (category={category})"]}
+    try:
+        examples = retrieve_examples(
+            query=state["request"],
+            category=category,
+            top_k=2,
+        )
+        context = format_fewshot_context(examples)
+        return {
+            "fewshot_context": context,
+            "audit": [f"[{ts}] Few-shot: {len(examples)} example(s) retrieved"],
+        }
+    except Exception as e:
+        return {
+            "fewshot_context": "",
+            "audit": [f"[{ts}] Few-shot error ({e}), continuing without examples"],
+        }
+
+
 # --- Domain Worker Factory ---
 
 WORKER_CONFIGS = {
@@ -304,6 +332,7 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
     prompt_template = ChatPromptTemplate.from_messages([
         SystemMessage(content=system_content),
         ("human",
+         "{fewshot_context}\n\n"
          "{rag_context}\n\n"
          "{history}\n"
          "Employee: {employee_name}\n"
@@ -317,6 +346,7 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
         ts = datetime.now().strftime("%H:%M:%S")
         try:
             messages = prompt_template.format_messages(
+                fewshot_context=state.get("fewshot_context") or "",
                 rag_context=state.get("rag_context") or "",
                 history=format_history(state),
                 employee_name=state["employee_name"],
@@ -664,6 +694,7 @@ def build_graph():
 
     graph.add_node("supervisor", supervisor)
     graph.add_node("rag_retrieval", rag_retrieval)
+    graph.add_node("fewshot_retrieval", fewshot_retrieval)
     graph.add_node("clarify", clarify_agent)
     graph.add_node("hr_worker", hr_worker)
     graph.add_node("tech_worker", tech_worker)
@@ -692,11 +723,14 @@ def build_graph():
         "general": "general_worker",
     })
 
-    # After RAG retrieval, route to the correct worker based on category
+    # After RAG retrieval, go to few-shot retrieval
+    graph.add_edge("rag_retrieval", "fewshot_retrieval")
+
+    # After few-shot retrieval, route to the correct worker based on category
     def route_to_worker(state: SupportRequest) -> str:
         return f"{state['category']}_worker"
 
-    graph.add_conditional_edges("rag_retrieval", route_to_worker, {
+    graph.add_conditional_edges("fewshot_retrieval", route_to_worker, {
         "hr_worker": "hr_worker",
         "tech_worker": "tech_worker",
         "finance_worker": "finance_worker",
