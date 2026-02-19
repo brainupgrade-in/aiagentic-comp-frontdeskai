@@ -404,12 +404,17 @@ WORKER_CONFIGS = {
             "- In skill code, use `skill_config()` to read config values. Return a helpful message if config is missing.\n"
             "- NEVER hardcode API keys or secrets in skill code — always use skill_config().\n"
             "- After installing a skill that declares config_keys, tell the admin what config values need to be set.\n\n"
+            "FILE OPERATIONS:\n"
+            "- Use read_local_file to read files from /shared/ (e.g. templates, configs, generated content)\n"
+            "- Use write_local_file to write files to /shared/ (e.g. generated certificates, reports)\n"
+            "- When asked to use a template, ALWAYS read it first with read_local_file, then customize it.\n\n"
             "CONTENT GENERATION & ADMIN TASKS:\n"
             "You also help admins with tasks that require web research and content creation:\n"
             "- Creating templates (certificates, reports, documents, emails)\n"
             "- Fetching branding/content from websites using fetch_webpage, then generating styled content\n"
             "- Any admin task that benefits from web research + generation\n"
             "When creating HTML templates, generate complete, self-contained HTML with inline CSS.\n"
+            "When asked to use a template at a file path, read it with read_local_file, customize it, and write the result with write_local_file.\n"
             "When asked to use branding from a website, use fetch_webpage to get colors, fonts, taglines, and incorporate them."
         ),
         "can_escalate": False,

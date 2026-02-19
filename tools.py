@@ -1424,6 +1424,47 @@ def send_email(to: str, subject: str, body: str) -> str:
 SMTP_TOOLS = [configure_smtp, get_smtp_config, send_email]
 
 
+# ========== FILE TOOLS (for skill_admin — restricted to /shared/) ==========
+
+_SHARED_DIR = os.path.dirname(os.getenv("SQLITE_DIR", "/shared/.sqlite"))
+
+
+@tool
+def read_local_file(file_path: str) -> str:
+    """Read a file from the /shared/ directory. Path must be under /shared/."""
+    resolved = os.path.realpath(file_path)
+    if not resolved.startswith(os.path.realpath(_SHARED_DIR)):
+        return f"Access denied: can only read files under {_SHARED_DIR}"
+    if not os.path.isfile(resolved):
+        return f"File not found: {file_path}"
+    try:
+        with open(resolved, encoding="utf-8") as f:
+            content = f.read()
+        if len(content) > 50000:
+            content = content[:50000] + "\n... (truncated)"
+        return content
+    except Exception as e:
+        return f"Error reading file: {e}"
+
+
+@tool
+def write_local_file(file_path: str, content: str) -> str:
+    """Write content to a file in the /shared/ directory. Path must be under /shared/."""
+    resolved = os.path.realpath(os.path.join(_SHARED_DIR, file_path) if not file_path.startswith("/") else file_path)
+    if not resolved.startswith(os.path.realpath(_SHARED_DIR)):
+        return f"Access denied: can only write files under {_SHARED_DIR}"
+    try:
+        os.makedirs(os.path.dirname(resolved), exist_ok=True)
+        with open(resolved, "w", encoding="utf-8") as f:
+            f.write(content)
+        return f"File written successfully: {resolved} ({len(content)} bytes)"
+    except Exception as e:
+        return f"Error writing file: {e}"
+
+
+FILE_TOOLS = [read_local_file, write_local_file]
+
+
 # ========== TOOL REGISTRY ==========
 
 HR_TOOLS = [get_leave_balance, apply_leave]
@@ -1434,7 +1475,7 @@ FACILITIES_TOOLS = [check_room_availability, book_meeting_room]
 from skills import SKILL_ADMIN_TOOLS
 
 # Append LLM config and SMTP tools to skill_admin tools
-SKILL_ADMIN_TOOLS = SKILL_ADMIN_TOOLS + LLM_CONFIG_TOOLS + SMTP_TOOLS
+SKILL_ADMIN_TOOLS = SKILL_ADMIN_TOOLS + LLM_CONFIG_TOOLS + SMTP_TOOLS + FILE_TOOLS
 
 DOMAIN_TOOLS = {
     "hr": HR_TOOLS,
