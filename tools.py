@@ -1,0 +1,869 @@
+"""Tool definitions for FrontDesk AI agents.
+
+Each domain (HR, Tech, Finance, Facilities) has tools that agents can call
+to look up data or take actions. Backed by a SQLite database with proper
+schema, constraints, indexes, and foreign keys.
+"""
+
+import os
+import sqlite3
+from datetime import datetime
+
+from langchain_core.tools import tool
+
+TOOLS_DB = os.path.join(os.getenv("SQLITE_DIR", "/shared/.sqlite"), "frontdesk_tools.db")
+
+_db_initialized = False
+
+
+def _get_db() -> sqlite3.Connection:
+    """Get a connection with FK enforcement and row factory. Initialize schema on first call."""
+    global _db_initialized
+    os.makedirs(os.path.dirname(TOOLS_DB), exist_ok=True)
+    conn = sqlite3.connect(TOOLS_DB)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.row_factory = sqlite3.Row
+    if not _db_initialized:
+        _init_schema(conn)
+        _db_initialized = True
+    return conn
+
+
+def _init_schema(conn: sqlite3.Connection):
+    """Create all tables, indexes, and seed reference data (idempotent)."""
+    conn.executescript("""
+        -- =============================================
+        -- EMPLOYEES: master table for all employee data
+        -- =============================================
+        CREATE TABLE IF NOT EXISTS employees (
+            employee_id   TEXT PRIMARY KEY,              -- username part of email
+            full_name     TEXT NOT NULL,
+            email         TEXT NOT NULL UNIQUE,
+            department    TEXT NOT NULL DEFAULT 'general',
+            designation   TEXT NOT NULL DEFAULT 'Employee',
+            date_of_join  TEXT NOT NULL DEFAULT (date('now')),
+            is_active     INTEGER NOT NULL DEFAULT 1,
+            created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_employees_dept ON employees(department);
+        CREATE INDEX IF NOT EXISTS idx_employees_active ON employees(is_active);
+
+        -- =============================================
+        -- LEAVE BALANCES: annual allocation per employee
+        -- =============================================
+        CREATE TABLE IF NOT EXISTS leave_balances (
+            employee_id   TEXT PRIMARY KEY
+                          REFERENCES employees(employee_id) ON DELETE CASCADE,
+            casual_leave  INTEGER NOT NULL DEFAULT 12 CHECK(casual_leave >= 0),
+            sick_leave    INTEGER NOT NULL DEFAULT 6  CHECK(sick_leave >= 0),
+            earned_leave  INTEGER NOT NULL DEFAULT 15 CHECK(earned_leave >= 0),
+            wfh_days      INTEGER NOT NULL DEFAULT 24 CHECK(wfh_days >= 0),
+            year          INTEGER NOT NULL DEFAULT (CAST(strftime('%Y','now') AS INTEGER)),
+            updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        -- =============================================
+        -- LEAVE REQUESTS: application + approval workflow
+        -- =============================================
+        CREATE TABLE IF NOT EXISTS leave_requests (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            employee_id   TEXT NOT NULL
+                          REFERENCES employees(employee_id) ON DELETE CASCADE,
+            leave_type    TEXT NOT NULL CHECK(leave_type IN ('casual','sick','earned','wfh')),
+            start_date    TEXT NOT NULL,                 -- YYYY-MM-DD
+            end_date      TEXT NOT NULL,                 -- YYYY-MM-DD
+            days          INTEGER NOT NULL CHECK(days > 0),
+            reason        TEXT NOT NULL DEFAULT '',
+            status        TEXT NOT NULL DEFAULT 'pending'
+                          CHECK(status IN ('pending','approved','rejected','cancelled')),
+            approved_by   TEXT REFERENCES employees(employee_id),
+            created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_leave_req_emp ON leave_requests(employee_id);
+        CREATE INDEX IF NOT EXISTS idx_leave_req_status ON leave_requests(status);
+        CREATE INDEX IF NOT EXISTS idx_leave_req_dates ON leave_requests(start_date, end_date);
+
+        -- =============================================
+        -- TICKETS: IT support ticket management
+        -- =============================================
+        CREATE TABLE IF NOT EXISTS tickets (
+            ticket_id     TEXT PRIMARY KEY,               -- e.g. TECH-1001
+            summary       TEXT NOT NULL,
+            description   TEXT NOT NULL DEFAULT '',
+            priority      TEXT NOT NULL DEFAULT 'P3'
+                          CHECK(priority IN ('P1','P2','P3','P4')),
+            status        TEXT NOT NULL DEFAULT 'Open'
+                          CHECK(status IN ('Open','In Progress','Resolved','Closed','On Hold')),
+            category      TEXT NOT NULL DEFAULT 'general'
+                          CHECK(category IN ('hardware','software','network','access','security','general')),
+            assignee      TEXT REFERENCES employees(employee_id),
+            created_by    TEXT NOT NULL
+                          REFERENCES employees(employee_id),
+            resolved_at   TEXT,
+            sla_hours     INTEGER NOT NULL DEFAULT 48,    -- derived from priority
+            created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
+        CREATE INDEX IF NOT EXISTS idx_tickets_priority ON tickets(priority);
+        CREATE INDEX IF NOT EXISTS idx_tickets_assignee ON tickets(assignee);
+        CREATE INDEX IF NOT EXISTS idx_tickets_created_by ON tickets(created_by);
+
+        -- =============================================
+        -- TICKET COMMENTS: activity log on tickets
+        -- =============================================
+        CREATE TABLE IF NOT EXISTS ticket_comments (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticket_id     TEXT NOT NULL
+                          REFERENCES tickets(ticket_id) ON DELETE CASCADE,
+            author        TEXT NOT NULL
+                          REFERENCES employees(employee_id),
+            comment       TEXT NOT NULL,
+            created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_tcomments_ticket ON ticket_comments(ticket_id);
+
+        -- =============================================
+        -- EXPENSE CLAIMS: reimbursement tracking
+        -- =============================================
+        CREATE TABLE IF NOT EXISTS expense_claims (
+            claim_id      TEXT PRIMARY KEY,               -- e.g. EXP-2026-0001
+            employee_id   TEXT NOT NULL
+                          REFERENCES employees(employee_id) ON DELETE CASCADE,
+            amount        REAL NOT NULL CHECK(amount > 0),
+            currency      TEXT NOT NULL DEFAULT 'INR',
+            category      TEXT NOT NULL
+                          CHECK(category IN ('travel','meals','software','hardware','training','office_supplies','other')),
+            description   TEXT NOT NULL,
+            receipt_count INTEGER NOT NULL DEFAULT 0,
+            status        TEXT NOT NULL DEFAULT 'submitted'
+                          CHECK(status IN ('draft','submitted','under_review','approved','rejected','paid')),
+            reviewed_by   TEXT REFERENCES employees(employee_id),
+            rejection_reason TEXT,
+            submitted_at  TEXT NOT NULL DEFAULT (datetime('now')),
+            reviewed_at   TEXT,
+            paid_at       TEXT,
+            created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_expense_emp ON expense_claims(employee_id);
+        CREATE INDEX IF NOT EXISTS idx_expense_status ON expense_claims(status);
+
+        -- =============================================
+        -- MEETING ROOMS: room master data
+        -- =============================================
+        CREATE TABLE IF NOT EXISTS meeting_rooms (
+            room_id       TEXT PRIMARY KEY,               -- slug: ganges, yamuna, ...
+            room_name     TEXT NOT NULL UNIQUE,            -- display name
+            capacity      INTEGER NOT NULL CHECK(capacity > 0),
+            floor         TEXT NOT NULL,
+            has_projector INTEGER NOT NULL DEFAULT 1,
+            has_whiteboard INTEGER NOT NULL DEFAULT 1,
+            has_video_conf INTEGER NOT NULL DEFAULT 0,
+            is_active     INTEGER NOT NULL DEFAULT 1
+        );
+
+        -- =============================================
+        -- ROOM BOOKINGS: reservation system
+        -- =============================================
+        CREATE TABLE IF NOT EXISTS room_bookings (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            room_id       TEXT NOT NULL
+                          REFERENCES meeting_rooms(room_id) ON DELETE CASCADE,
+            date          TEXT NOT NULL,                  -- YYYY-MM-DD
+            start_time    TEXT NOT NULL,                  -- HH:MM (24h)
+            end_time      TEXT NOT NULL,                  -- HH:MM (24h)
+            booked_by     TEXT NOT NULL
+                          REFERENCES employees(employee_id),
+            purpose       TEXT NOT NULL DEFAULT 'Meeting',
+            attendees     INTEGER NOT NULL DEFAULT 2,
+            status        TEXT NOT NULL DEFAULT 'confirmed'
+                          CHECK(status IN ('confirmed','cancelled')),
+            created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            CHECK(end_time > start_time)
+        );
+        CREATE INDEX IF NOT EXISTS idx_bookings_room_date ON room_bookings(room_id, date);
+        CREATE INDEX IF NOT EXISTS idx_bookings_booked_by ON room_bookings(booked_by);
+        CREATE INDEX IF NOT EXISTS idx_bookings_status ON room_bookings(status);
+
+        -- =============================================
+        -- PAYROLL: salary slip tracking
+        -- =============================================
+        CREATE TABLE IF NOT EXISTS payslips (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            employee_id   TEXT NOT NULL
+                          REFERENCES employees(employee_id) ON DELETE CASCADE,
+            month         TEXT NOT NULL,                  -- YYYY-MM
+            gross_salary  REAL NOT NULL CHECK(gross_salary > 0),
+            deductions    REAL NOT NULL DEFAULT 0 CHECK(deductions >= 0),
+            net_salary    REAL NOT NULL CHECK(net_salary > 0),
+            status        TEXT NOT NULL DEFAULT 'generated'
+                          CHECK(status IN ('generated','dispatched','acknowledged')),
+            generated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(employee_id, month)
+        );
+        CREATE INDEX IF NOT EXISTS idx_payslips_emp ON payslips(employee_id);
+        CREATE INDEX IF NOT EXISTS idx_payslips_month ON payslips(month);
+    """)
+
+    # ---------- Seed reference data (idempotent via INSERT OR IGNORE) ----------
+
+    employees = [
+        ("rajesh",       "Rajesh Gheware",  "rajesh@unigps.in",       "engineering", "CTO",               "2020-01-15"),
+        ("admin",        "Admin User",      "admin@unigps.in",        "admin",       "System Admin",      "2020-01-01"),
+        ("priya.sharma", "Priya Sharma",    "priya.sharma@unigps.in", "engineering", "Senior Developer",  "2022-06-10"),
+        ("amit.patel",   "Amit Patel",      "amit.patel@unigps.in",   "engineering", "DevOps Engineer",   "2023-03-20"),
+        ("neha.gupta",   "Neha Gupta",      "neha.gupta@unigps.in",   "product",     "Product Manager",   "2023-09-01"),
+        ("suresh.kumar", "Suresh Kumar",    "suresh.kumar@unigps.in", "finance",     "Finance Manager",   "2021-04-12"),
+        ("anita.verma",  "Anita Verma",     "anita.verma@unigps.in",  "hr",          "HR Manager",        "2021-02-01"),
+        ("it.support",   "IT Support Desk", "it.support@unigps.in",   "it",          "IT Support Lead",   "2020-01-01"),
+    ]
+    conn.executemany(
+        "INSERT OR IGNORE INTO employees (employee_id, full_name, email, department, designation, date_of_join) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        employees,
+    )
+
+    leave_balances = [
+        ("rajesh",        8,  5,  12, 20),
+        ("admin",        12,  6,  15, 24),
+        ("priya.sharma",  5,  3,  10, 18),
+        ("amit.patel",   10,  6,  14, 22),
+        ("neha.gupta",    3,  2,   8, 15),
+        ("suresh.kumar", 11,  6,  13, 22),
+        ("anita.verma",   9,  4,  11, 20),
+        ("it.support",   12,  6,  15, 24),
+    ]
+    conn.executemany(
+        "INSERT OR IGNORE INTO leave_balances (employee_id, casual_leave, sick_leave, earned_leave, wfh_days) "
+        "VALUES (?, ?, ?, ?, ?)",
+        leave_balances,
+    )
+
+    # Pre-existing leave requests
+    leave_requests = [
+        ("priya.sharma", "casual",  "2026-02-10", "2026-02-11", 2, "Family function",   "approved", "anita.verma"),
+        ("amit.patel",   "sick",    "2026-02-05", "2026-02-05", 1, "Not feeling well",  "approved", "anita.verma"),
+        ("neha.gupta",   "earned",  "2026-03-01", "2026-03-07", 7, "Vacation to Goa",   "pending",  None),
+    ]
+    for lr in leave_requests:
+        conn.execute(
+            "INSERT OR IGNORE INTO leave_requests "
+            "(employee_id, leave_type, start_date, end_date, days, reason, status, approved_by) "
+            "SELECT ?, ?, ?, ?, ?, ?, ?, ? "
+            "WHERE NOT EXISTS (SELECT 1 FROM leave_requests WHERE employee_id=? AND start_date=? AND end_date=?)",
+            (*lr, lr[0], lr[2], lr[3]),
+        )
+
+    tickets = [
+        ("TECH-1001", "VPN not connecting from home",      "Getting timeout errors when connecting via Cisco AnyConnect from home WiFi. Tried restarting the client.",
+         "P2", "In Progress", "network",   "it.support",  "priya.sharma", None, 24),
+        ("TECH-1002", "Need AWS console access",           "Require read access to production S3 buckets and CloudWatch logs for debugging.",
+         "P3", "Open",        "access",    None,           "amit.patel",   None, 48),
+        ("TECH-1003", "Laptop screen flickering",          "Dell XPS 15 screen flickers intermittently, especially when on battery power.",
+         "P3", "Open",        "hardware",  None,           "neha.gupta",   None, 48),
+        ("TECH-1004", "Jira dashboard loading slow",       "Jira dashboards take 15+ seconds to load. Other team members reporting same issue.",
+         "P2", "Resolved",    "software",  "it.support",  "rajesh",       "2026-02-19 16:30:00", 24),
+        ("TECH-1005", "New joiner laptop setup",           "Need a MacBook Pro M3 setup with standard dev tools for new hire starting Feb 24.",
+         "P4", "Open",        "hardware",  None,           "anita.verma",  None, 72),
+    ]
+    conn.executemany(
+        "INSERT OR IGNORE INTO tickets "
+        "(ticket_id, summary, description, priority, status, category, assignee, created_by, resolved_at, sla_hours) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        tickets,
+    )
+
+    ticket_comments = [
+        ("TECH-1001", "priya.sharma", "Tried restarting laptop and router, still not working."),
+        ("TECH-1001", "it.support",   "Checked VPN server logs. Session is timing out at the firewall. Escalating to network team."),
+        ("TECH-1004", "it.support",   "Identified the issue — Jira indexing job was stuck. Cleared the queue and restarted the service."),
+        ("TECH-1004", "rajesh",       "Confirmed it's loading fast now. Thanks!"),
+    ]
+    for tc in ticket_comments:
+        conn.execute(
+            "INSERT OR IGNORE INTO ticket_comments (ticket_id, author, comment) "
+            "SELECT ?, ?, ? "
+            "WHERE NOT EXISTS (SELECT 1 FROM ticket_comments WHERE ticket_id=? AND author=? AND comment=?)",
+            (*tc, *tc),
+        )
+
+    expense_claims = [
+        ("EXP-2026-0001", "rajesh",       4500.00,  "travel",    "Client visit to Mumbai — flight tickets (BLR-BOM round trip)",
+         2, "approved",    "suresh.kumar", None,           "2026-02-10", "2026-02-15", "2026-02-18"),
+        ("EXP-2026-0002", "priya.sharma", 1200.00,  "software",  "JetBrains IntelliJ IDEA Ultimate — annual license renewal",
+         1, "submitted",   None,           None,           "2026-02-18", None,          None),
+        ("EXP-2026-0003", "amit.patel",    850.00,  "meals",     "Team dinner — Q4 project celebration at Barbeque Nation",
+         1, "under_review","suresh.kumar", None,           "2026-02-19", None,          None),
+        ("EXP-2026-0004", "neha.gupta",  15000.00,  "training",  "AWS Solutions Architect Professional course on Udemy",
+         1, "rejected",    "suresh.kumar", "Exceeds per-course limit of Rs. 10,000. Please get VP approval.", "2026-02-05", "2026-02-12", None),
+        ("EXP-2026-0005", "rajesh",       2200.00,  "travel",    "Cab to airport and back for Mumbai client visit",
+         2, "paid",        "suresh.kumar", None,           "2026-02-10", "2026-02-15", "2026-02-20"),
+    ]
+    conn.executemany(
+        "INSERT OR IGNORE INTO expense_claims "
+        "(claim_id, employee_id, amount, category, description, receipt_count, status, reviewed_by, rejection_reason, submitted_at, reviewed_at, paid_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        expense_claims,
+    )
+
+    rooms = [
+        ("ganges",   "Ganges",   10, "2nd Floor", 1, 1, 1),
+        ("yamuna",   "Yamuna",    6, "2nd Floor", 1, 0, 0),
+        ("kaveri",   "Kaveri",   20, "3rd Floor", 1, 1, 1),
+        ("narmada",  "Narmada",   4, "1st Floor", 0, 1, 0),
+        ("godavari", "Godavari", 12, "3rd Floor", 1, 1, 1),
+    ]
+    conn.executemany(
+        "INSERT OR IGNORE INTO meeting_rooms "
+        "(room_id, room_name, capacity, floor, has_projector, has_whiteboard, has_video_conf) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        rooms,
+    )
+
+    bookings = [
+        ("ganges",  "2026-02-20", "10:00", "11:00", "rajesh",       "Sprint planning",           6),
+        ("kaveri",  "2026-02-20", "14:00", "15:30", "priya.sharma", "Design review",             8),
+        ("ganges",  "2026-02-21", "09:00", "10:00", "amit.patel",   "Morning standup",           4),
+        ("godavari","2026-02-20", "11:00", "12:00", "neha.gupta",   "Product roadmap discussion",5),
+    ]
+    for b in bookings:
+        conn.execute(
+            "INSERT OR IGNORE INTO room_bookings (room_id, date, start_time, end_time, booked_by, purpose, attendees) "
+            "SELECT ?, ?, ?, ?, ?, ?, ? "
+            "WHERE NOT EXISTS (SELECT 1 FROM room_bookings WHERE room_id=? AND date=? AND start_time=?)",
+            (*b, b[0], b[1], b[2]),
+        )
+
+    # Payslips for last 3 months
+    payslip_data = [
+        ("rajesh",       "2025-12", 250000, 62500,  187500),
+        ("rajesh",       "2026-01", 250000, 62500,  187500),
+        ("priya.sharma", "2025-12", 150000, 37500,  112500),
+        ("priya.sharma", "2026-01", 150000, 37500,  112500),
+        ("amit.patel",   "2025-12", 120000, 30000,   90000),
+        ("amit.patel",   "2026-01", 120000, 30000,   90000),
+        ("neha.gupta",   "2025-12", 140000, 35000,  105000),
+        ("neha.gupta",   "2026-01", 140000, 35000,  105000),
+    ]
+    conn.executemany(
+        "INSERT OR IGNORE INTO payslips (employee_id, month, gross_salary, deductions, net_salary) "
+        "VALUES (?, ?, ?, ?, ?)",
+        payslip_data,
+    )
+
+    conn.commit()
+
+
+# ==========================================
+# Sequence generator for ticket / claim IDs
+# ==========================================
+
+def _next_ticket_id(conn: sqlite3.Connection) -> str:
+    """Generate next TECH-NNNN ticket ID."""
+    row = conn.execute(
+        "SELECT ticket_id FROM tickets ORDER BY ticket_id DESC LIMIT 1"
+    ).fetchone()
+    if row:
+        num = int(row["ticket_id"].split("-")[1]) + 1
+    else:
+        num = 1001
+    return f"TECH-{num}"
+
+
+def _next_claim_id(conn: sqlite3.Connection) -> str:
+    """Generate next EXP-YYYY-NNNN claim ID."""
+    year = datetime.now().strftime("%Y")
+    row = conn.execute(
+        "SELECT claim_id FROM expense_claims WHERE claim_id LIKE ? ORDER BY claim_id DESC LIMIT 1",
+        (f"EXP-{year}-%",),
+    ).fetchone()
+    if row:
+        num = int(row["claim_id"].split("-")[2]) + 1
+    else:
+        num = 1
+    return f"EXP-{year}-{num:04d}"
+
+
+# ========== HR TOOLS ==========
+
+@tool
+def get_leave_balance(employee_id: str) -> str:
+    """Look up an employee's current leave balance. The employee_id is the part before @ in their email (e.g. 'rajesh' for rajesh@unigps.in)."""
+    conn = _get_db()
+    try:
+        emp = conn.execute(
+            "SELECT e.full_name, e.department, lb.* FROM employees e "
+            "JOIN leave_balances lb ON e.employee_id = lb.employee_id "
+            "WHERE e.employee_id = ? AND e.is_active = 1",
+            (employee_id,),
+        ).fetchone()
+        if not emp:
+            return f"No leave balance found for employee '{employee_id}'. They may need to contact HR to set up their account."
+
+        # Also get pending leave requests
+        pending = conn.execute(
+            "SELECT leave_type, start_date, end_date, days FROM leave_requests "
+            "WHERE employee_id = ? AND status = 'pending' ORDER BY start_date",
+            (employee_id,),
+        ).fetchall()
+
+        lines = [
+            f"Leave balance for {emp['full_name']} ({employee_id}) — {emp['department'].title()} dept:",
+            f"  Casual Leave:  {emp['casual_leave']} days remaining",
+            f"  Sick Leave:    {emp['sick_leave']} days remaining",
+            f"  Earned Leave:  {emp['earned_leave']} days remaining",
+            f"  WFH Days:      {emp['wfh_days']} days remaining",
+        ]
+        if pending:
+            lines.append(f"\nPending leave requests:")
+            for p in pending:
+                lines.append(f"  - {p['leave_type'].title()} leave: {p['start_date']} to {p['end_date']} ({p['days']} days)")
+        return "\n".join(lines)
+    finally:
+        conn.close()
+
+
+@tool
+def apply_leave(employee_id: str, leave_type: str, start_date: str, end_date: str, reason: str = "") -> str:
+    """Apply for leave on behalf of an employee. leave_type must be one of: casual, sick, earned, wfh. Dates in YYYY-MM-DD format."""
+    valid_types = ("casual", "sick", "earned", "wfh")
+    if leave_type not in valid_types:
+        return f"Invalid leave type '{leave_type}'. Must be one of: {', '.join(valid_types)}"
+
+    try:
+        start = datetime.strptime(start_date, "%Y-%m-%d")
+        end = datetime.strptime(end_date, "%Y-%m-%d")
+    except ValueError:
+        return "Invalid date format. Use YYYY-MM-DD."
+
+    if end < start:
+        return "End date cannot be before start date."
+
+    days = (end - start).days + 1
+
+    conn = _get_db()
+    try:
+        row = conn.execute(
+            "SELECT * FROM leave_balances WHERE employee_id = ?", (employee_id,)
+        ).fetchone()
+        if not row:
+            return f"Employee '{employee_id}' not found in the system."
+
+        col = f"{leave_type}_leave" if leave_type != "wfh" else "wfh_days"
+        available = row[col]
+        if days > available:
+            return f"Insufficient {leave_type} leave. Requested {days} days but only {available} remaining."
+
+        # Check for overlapping approved/pending requests
+        overlap = conn.execute(
+            "SELECT * FROM leave_requests WHERE employee_id = ? "
+            "AND status IN ('pending', 'approved') "
+            "AND NOT (end_date < ? OR start_date > ?)",
+            (employee_id, start_date, end_date),
+        ).fetchone()
+        if overlap:
+            return (
+                f"Overlapping leave found: {overlap['leave_type']} leave from "
+                f"{overlap['start_date']} to {overlap['end_date']} (status: {overlap['status']}). "
+                f"Please cancel it first or choose different dates."
+            )
+
+        # Auto-approve <= 3 days, otherwise pending for manager approval
+        auto_approve = days <= 3
+        status = "approved" if auto_approve else "pending"
+
+        conn.execute(
+            "INSERT INTO leave_requests (employee_id, leave_type, start_date, end_date, days, reason, status) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (employee_id, leave_type, start_date, end_date, days, reason, status),
+        )
+
+        if auto_approve:
+            conn.execute(
+                f"UPDATE leave_balances SET {col} = {col} - ?, updated_at = datetime('now') "
+                "WHERE employee_id = ?",
+                (days, employee_id),
+            )
+            remaining = available - days
+            result = (
+                f"Leave approved! {days} day(s) of {leave_type} leave from {start_date} to {end_date}.\n"
+                f"Remaining {leave_type}: {remaining} days."
+            )
+        else:
+            result = (
+                f"Leave request submitted for manager approval: {days} day(s) of {leave_type} leave "
+                f"from {start_date} to {end_date}.\n"
+                f"Requests of more than 3 days require manager approval. You'll be notified once reviewed."
+            )
+
+        conn.commit()
+        return result
+    finally:
+        conn.close()
+
+
+# ========== TECH TOOLS ==========
+
+@tool
+def create_ticket(summary: str, priority: str, category: str = "general", description: str = "", created_by: str = "") -> str:
+    """Create a new IT support ticket. priority: P1/P2/P3/P4. category: hardware/software/network/access/security/general."""
+    valid_priorities = {"P1": 4, "P2": 24, "P3": 48, "P4": 72}  # SLA hours
+    valid_categories = ("hardware", "software", "network", "access", "security", "general")
+
+    if priority not in valid_priorities:
+        return f"Invalid priority '{priority}'. Must be one of: {', '.join(valid_priorities)}"
+    if category not in valid_categories:
+        return f"Invalid category '{category}'. Must be one of: {', '.join(valid_categories)}"
+
+    conn = _get_db()
+    try:
+        # Verify creator exists
+        if created_by:
+            emp = conn.execute("SELECT 1 FROM employees WHERE employee_id = ?", (created_by,)).fetchone()
+            if not emp:
+                return f"Employee '{created_by}' not found."
+
+        ticket_id = _next_ticket_id(conn)
+        sla = valid_priorities[priority]
+
+        conn.execute(
+            "INSERT INTO tickets (ticket_id, summary, description, priority, category, created_by, sla_hours) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (ticket_id, summary, description, priority, category, created_by or "system", sla),
+        )
+        conn.commit()
+
+        return (
+            f"Ticket created successfully!\n"
+            f"  Ticket ID: {ticket_id}\n"
+            f"  Summary: {summary}\n"
+            f"  Priority: {priority} (SLA: {sla} hours)\n"
+            f"  Category: {category}\n"
+            f"  Status: Open"
+        )
+    finally:
+        conn.close()
+
+
+@tool
+def get_ticket_status(ticket_id: str) -> str:
+    """Check the status of an IT support ticket by its ID (e.g. TECH-1001). Shows full details and recent comments."""
+    conn = _get_db()
+    try:
+        row = conn.execute(
+            "SELECT t.*, e.full_name AS creator_name, a.full_name AS assignee_name "
+            "FROM tickets t "
+            "JOIN employees e ON t.created_by = e.employee_id "
+            "LEFT JOIN employees a ON t.assignee = a.employee_id "
+            "WHERE t.ticket_id = ?",
+            (ticket_id.upper(),),
+        ).fetchone()
+        if not row:
+            return f"Ticket '{ticket_id}' not found."
+
+        lines = [
+            f"Ticket {row['ticket_id']}:",
+            f"  Summary:    {row['summary']}",
+            f"  Priority:   {row['priority']} (SLA: {row['sla_hours']}h)",
+            f"  Status:     {row['status']}",
+            f"  Category:   {row['category']}",
+            f"  Created by: {row['creator_name']}",
+            f"  Assignee:   {row['assignee_name'] or 'Unassigned'}",
+            f"  Created:    {row['created_at']}",
+        ]
+        if row["resolved_at"]:
+            lines.append(f"  Resolved:   {row['resolved_at']}")
+
+        # Fetch recent comments
+        comments = conn.execute(
+            "SELECT tc.comment, tc.created_at, e.full_name "
+            "FROM ticket_comments tc JOIN employees e ON tc.author = e.employee_id "
+            "WHERE tc.ticket_id = ? ORDER BY tc.created_at DESC LIMIT 5",
+            (ticket_id.upper(),),
+        ).fetchall()
+        if comments:
+            lines.append(f"\nRecent activity ({len(comments)} comments):")
+            for c in reversed(comments):
+                lines.append(f"  [{c['created_at']}] {c['full_name']}: {c['comment']}")
+
+        return "\n".join(lines)
+    finally:
+        conn.close()
+
+
+@tool
+def list_my_tickets(employee_id: str) -> str:
+    """List all open/in-progress tickets created by or assigned to an employee."""
+    conn = _get_db()
+    try:
+        rows = conn.execute(
+            "SELECT ticket_id, summary, priority, status, category "
+            "FROM tickets "
+            "WHERE (created_by = ? OR assignee = ?) AND status NOT IN ('Closed') "
+            "ORDER BY CASE priority WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 WHEN 'P3' THEN 3 ELSE 4 END, created_at DESC",
+            (employee_id, employee_id),
+        ).fetchall()
+        if not rows:
+            return f"No open tickets found for '{employee_id}'."
+
+        lines = [f"Open tickets for {employee_id} ({len(rows)} total):"]
+        for r in rows:
+            lines.append(f"  [{r['priority']}] {r['ticket_id']}: {r['summary']} — {r['status']}")
+        return "\n".join(lines)
+    finally:
+        conn.close()
+
+
+# ========== FINANCE TOOLS ==========
+
+@tool
+def get_expense_status(claim_id: str) -> str:
+    """Check the status of an expense reimbursement claim by its ID (e.g. EXP-2026-0001)."""
+    conn = _get_db()
+    try:
+        row = conn.execute(
+            "SELECT ec.*, e.full_name, r.full_name AS reviewer_name "
+            "FROM expense_claims ec "
+            "JOIN employees e ON ec.employee_id = e.employee_id "
+            "LEFT JOIN employees r ON ec.reviewed_by = r.employee_id "
+            "WHERE ec.claim_id = ?",
+            (claim_id.upper(),),
+        ).fetchone()
+        if not row:
+            return f"Expense claim '{claim_id}' not found."
+
+        lines = [
+            f"Expense Claim {row['claim_id']}:",
+            f"  Employee:    {row['full_name']}",
+            f"  Amount:      {row['currency']} {row['amount']:,.2f}",
+            f"  Category:    {row['category']}",
+            f"  Description: {row['description']}",
+            f"  Receipts:    {row['receipt_count']}",
+            f"  Status:      {row['status']}",
+            f"  Submitted:   {row['submitted_at']}",
+        ]
+        if row["reviewed_by"]:
+            lines.append(f"  Reviewed by: {row['reviewer_name']} on {row['reviewed_at']}")
+        if row["rejection_reason"]:
+            lines.append(f"  Rejection reason: {row['rejection_reason']}")
+        if row["paid_at"]:
+            lines.append(f"  Paid on:     {row['paid_at']}")
+        return "\n".join(lines)
+    finally:
+        conn.close()
+
+
+@tool
+def submit_expense_claim(employee_id: str, amount: float, category: str, description: str, receipt_count: int = 1) -> str:
+    """Submit a new expense reimbursement claim. category: travel/meals/software/hardware/training/office_supplies/other."""
+    valid_categories = ("travel", "meals", "software", "hardware", "training", "office_supplies", "other")
+    if category not in valid_categories:
+        return f"Invalid category '{category}'. Must be one of: {', '.join(valid_categories)}"
+    if amount <= 0:
+        return "Amount must be positive."
+
+    conn = _get_db()
+    try:
+        emp = conn.execute("SELECT 1 FROM employees WHERE employee_id = ? AND is_active = 1", (employee_id,)).fetchone()
+        if not emp:
+            return f"Employee '{employee_id}' not found."
+
+        claim_id = _next_claim_id(conn)
+        conn.execute(
+            "INSERT INTO expense_claims (claim_id, employee_id, amount, category, description, receipt_count, status) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'submitted')",
+            (claim_id, employee_id, amount, category, description, receipt_count),
+        )
+        conn.commit()
+
+        return (
+            f"Expense claim submitted!\n"
+            f"  Claim ID:    {claim_id}\n"
+            f"  Amount:      INR {amount:,.2f}\n"
+            f"  Category:    {category}\n"
+            f"  Description: {description}\n"
+            f"  Status:      submitted (pending finance review)"
+        )
+    finally:
+        conn.close()
+
+
+@tool
+def get_payslip(employee_id: str, month: str) -> str:
+    """Retrieve salary slip details for a given month (format: YYYY-MM, e.g. 2026-01)."""
+    try:
+        datetime.strptime(month, "%Y-%m")
+    except ValueError:
+        return "Invalid month format. Use YYYY-MM (e.g. 2026-01)."
+
+    conn = _get_db()
+    try:
+        row = conn.execute(
+            "SELECT p.*, e.full_name, e.designation FROM payslips p "
+            "JOIN employees e ON p.employee_id = e.employee_id "
+            "WHERE p.employee_id = ? AND p.month = ?",
+            (employee_id, month),
+        ).fetchone()
+        if not row:
+            # Check if the month is in the future
+            now = datetime.now()
+            req_month = datetime.strptime(month, "%Y-%m")
+            if req_month.replace(day=1) >= now.replace(day=1):
+                return f"Salary slip for {month} is not yet available. Slips are generated by the 5th of the following month."
+            return f"No salary slip found for '{employee_id}' for {month}. Please contact HR if this is an error."
+
+        return (
+            f"Salary Slip — {row['full_name']} ({row['designation']})\n"
+            f"  Month:       {row['month']}\n"
+            f"  Gross Salary: INR {row['gross_salary']:,.2f}\n"
+            f"  Deductions:   INR {row['deductions']:,.2f}\n"
+            f"  Net Salary:   INR {row['net_salary']:,.2f}\n"
+            f"  Status:       {row['status']}\n"
+            f"  Generated:    {row['generated_at']}"
+        )
+    finally:
+        conn.close()
+
+
+# ========== FACILITIES TOOLS ==========
+
+@tool
+def check_room_availability(date: str) -> str:
+    """Check meeting room availability for a given date (YYYY-MM-DD format). Shows all rooms and their bookings."""
+    try:
+        datetime.strptime(date, "%Y-%m-%d")
+    except ValueError:
+        return "Invalid date format. Use YYYY-MM-DD."
+
+    conn = _get_db()
+    try:
+        rooms = conn.execute(
+            "SELECT * FROM meeting_rooms WHERE is_active = 1 ORDER BY floor, room_name"
+        ).fetchall()
+        bookings = conn.execute(
+            "SELECT rb.*, e.full_name FROM room_bookings rb "
+            "JOIN employees e ON rb.booked_by = e.employee_id "
+            "WHERE rb.date = ? AND rb.status = 'confirmed' ORDER BY rb.room_id, rb.start_time",
+            (date,),
+        ).fetchall()
+
+        booking_map: dict[str, list] = {}
+        for b in bookings:
+            booking_map.setdefault(b["room_id"], []).append(b)
+
+        lines = [f"Meeting room availability for {date}:\n"]
+        for room in rooms:
+            rid = room["room_id"]
+            features = []
+            if room["has_projector"]:
+                features.append("projector")
+            if room["has_whiteboard"]:
+                features.append("whiteboard")
+            if room["has_video_conf"]:
+                features.append("video conf")
+            feat_str = f" [{', '.join(features)}]" if features else ""
+            lines.append(
+                f"  {room['room_name']} — {room['floor']}, capacity {room['capacity']}{feat_str}:"
+            )
+
+            room_bookings = booking_map.get(rid, [])
+            if room_bookings:
+                for b in room_bookings:
+                    lines.append(
+                        f"    {b['start_time']}-{b['end_time']}: {b['purpose']} "
+                        f"({b['full_name']}, {b['attendees']} attendees)"
+                    )
+            else:
+                lines.append("    Available all day")
+        return "\n".join(lines)
+    finally:
+        conn.close()
+
+
+@tool
+def book_meeting_room(room_name: str, date: str, start_time: str, end_time: str, booked_by: str, purpose: str = "Meeting", attendees: int = 2) -> str:
+    """Book a meeting room. room_name: e.g. 'Ganges'. Date: YYYY-MM-DD. Times: HH:MM (24h). booked_by: employee_id."""
+    try:
+        datetime.strptime(date, "%Y-%m-%d")
+    except ValueError:
+        return "Invalid date format. Use YYYY-MM-DD."
+
+    conn = _get_db()
+    try:
+        # Find room by name (case-insensitive)
+        room = conn.execute(
+            "SELECT * FROM meeting_rooms WHERE LOWER(room_name) = LOWER(?) AND is_active = 1",
+            (room_name,),
+        ).fetchone()
+        if not room:
+            available = [r["room_name"] for r in conn.execute(
+                "SELECT room_name FROM meeting_rooms WHERE is_active = 1"
+            ).fetchall()]
+            return f"Room '{room_name}' not found. Available rooms: {', '.join(available)}"
+
+        # Validate capacity
+        if attendees > room["capacity"]:
+            return (
+                f"Room '{room['room_name']}' has capacity for {room['capacity']} people, "
+                f"but {attendees} attendees requested. Try a larger room."
+            )
+
+        # Verify employee exists
+        emp = conn.execute("SELECT 1 FROM employees WHERE employee_id = ?", (booked_by,)).fetchone()
+        if not emp:
+            return f"Employee '{booked_by}' not found."
+
+        # Check for time conflicts (only confirmed bookings)
+        conflicts = conn.execute(
+            "SELECT rb.*, e.full_name FROM room_bookings rb "
+            "JOIN employees e ON rb.booked_by = e.employee_id "
+            "WHERE rb.room_id = ? AND rb.date = ? AND rb.status = 'confirmed' "
+            "AND NOT (rb.end_time <= ? OR rb.start_time >= ?)",
+            (room["room_id"], date, start_time, end_time),
+        ).fetchall()
+        if conflicts:
+            conflict_info = "; ".join(
+                f"{c['start_time']}-{c['end_time']} by {c['full_name']}" for c in conflicts
+            )
+            return (
+                f"Room '{room['room_name']}' has a conflict on {date}: {conflict_info}. "
+                f"Please choose another time slot or room."
+            )
+
+        conn.execute(
+            "INSERT INTO room_bookings (room_id, date, start_time, end_time, booked_by, purpose, attendees) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (room["room_id"], date, start_time, end_time, booked_by, purpose, attendees),
+        )
+        conn.commit()
+
+        return (
+            f"Room booked successfully!\n"
+            f"  Room:      {room['room_name']} ({room['floor']}, capacity: {room['capacity']})\n"
+            f"  Date:      {date}\n"
+            f"  Time:      {start_time} - {end_time}\n"
+            f"  Booked by: {booked_by}\n"
+            f"  Purpose:   {purpose}\n"
+            f"  Attendees: {attendees}"
+        )
+    finally:
+        conn.close()
+
+
+# ========== TOOL REGISTRY ==========
+
+HR_TOOLS = [get_leave_balance, apply_leave]
+TECH_TOOLS = [create_ticket, get_ticket_status, list_my_tickets]
+FINANCE_TOOLS = [get_expense_status, submit_expense_claim, get_payslip]
+FACILITIES_TOOLS = [check_room_availability, book_meeting_room]
+
+DOMAIN_TOOLS = {
+    "hr": HR_TOOLS,
+    "tech": TECH_TOOLS,
+    "finance": FINANCE_TOOLS,
+    "facilities": FACILITIES_TOOLS,
+}

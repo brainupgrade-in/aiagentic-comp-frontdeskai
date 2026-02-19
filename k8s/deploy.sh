@@ -43,13 +43,18 @@ IMAGE="${REGISTRY}/frontdeskai:latest"
 echo "==> Namespace: ${NAMESPACE}"
 echo "==> Registry:  ${REGISTRY}"
 
-# 1. Update manifests with namespace
-echo "==> Updating manifests..."
-sed -i "s/YOURNAMESPACE/${NAMESPACE}/g" "${REPO_DIR}/k8s/deployment.yaml"
+# 1. Generate manifests with namespace substituted (temp files, no source mutation)
+echo "==> Generating manifests..."
+export YOURNAMESPACE="${NAMESPACE}"
+DEPLOY_TMP=$(mktemp)
+REGISTRY_TMP=$(mktemp)
+sed "s/YOURNAMESPACE/${NAMESPACE}/g" "${REPO_DIR}/k8s/deployment.yaml" > "${DEPLOY_TMP}"
+sed "s/YOURNAMESPACE/${NAMESPACE}/g" "${REPO_DIR}/k8s/registry.yaml" > "${REGISTRY_TMP}"
+trap 'rm -f "${DEPLOY_TMP}" "${REGISTRY_TMP}"' EXIT
 
 # 2. Deploy registry (deployment + service + PVC only; ingress is pre-created by admin)
 echo "==> Deploying private registry..."
-kubectl apply -f "${REPO_DIR}/k8s/registry.yaml"
+kubectl apply -f "${REGISTRY_TMP}"
 kubectl wait --for=condition=ready pod -l app=registry --timeout=120s
 
 # 3. Build and push image
@@ -61,9 +66,12 @@ docker push "${IMAGE}"
 
 # 4. Create secret (includes Langfuse keys if set in .env)
 echo "==> Creating secret..."
+AUTH_PASSWORD="${AUTH_PASSWORD:?ERROR: AUTH_PASSWORD not set in .env file}"
+
 SECRET_ARGS=(
   --from-literal=GROQ_API_KEY="${GROQ_API_KEY}"
   --from-literal=SECRET_KEY="$(head -c 32 /dev/urandom | base64)"
+  --from-literal=AUTH_PASSWORD="${AUTH_PASSWORD}"
 )
 if [ -n "${LANGFUSE_SECRET_KEY:-}" ] && [ -n "${LANGFUSE_PUBLIC_KEY:-}" ] && [ -n "${LANGFUSE_HOST:-}" ]; then
   SECRET_ARGS+=(
@@ -81,7 +89,7 @@ kubectl create secret generic frontdeskai-secret \
 
 # 5. Deploy app
 echo "==> Deploying application..."
-kubectl apply -f "${REPO_DIR}/k8s/deployment.yaml"
+kubectl apply -f "${DEPLOY_TMP}"
 kubectl apply -f "${REPO_DIR}/k8s/service.yaml"
 
 # 5b. Deploy ServiceMonitor if CRD exists and user has permissions

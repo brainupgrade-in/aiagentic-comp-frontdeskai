@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FrontDesk AI — Knowledge Base</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="chat-body">
+    <header class="chat-header">
+        <div class="header-left">
+            <svg width="32" height="32" viewBox="0 0 48 48" fill="none">
+                <rect width="48" height="48" rx="12" fill="#6366f1"/>
+                <path d="M14 16h20v2H14zm0 6h16v2H14zm0 6h12v2H14zm0 6h8v2H14z" fill="white"/>
+                <circle cx="36" cy="32" r="6" fill="#22d3ee"/>
+                <path d="M34 32l2 2 3-3" stroke="white" stroke-width="1.5" fill="none"/>
+            </svg>
+            <h2>Knowledge Base</h2>
+        </div>
+        <div class="header-right">
+            <span class="user-email">{{ user }}</span>
+            <a href="/chat" class="logout-btn">Back to Chat</a>
+            <a href="/logout" class="logout-btn">Logout</a>
+        </div>
+    </header>
+
+    <div class="kb-container">
+        <div class="kb-section">
+            <h3>Upload Policy Document</h3>
+            <p class="kb-hint">Upload a Markdown (.md) file to add to the knowledge base. The vector store will be re-indexed automatically.</p>
+            <form id="upload-form" class="kb-upload-form">
+                <input type="file" id="file-input" accept=".md" required>
+                <button type="submit" class="btn-primary" id="upload-btn">Upload &amp; Index</button>
+            </form>
+            <div id="upload-status" class="kb-status"></div>
+        </div>
+
+        <div class="kb-section">
+            <h3>Current Documents</h3>
+            <div class="kb-docs">
+                {% if docs %}
+                {% for doc in docs %}
+                <div class="kb-doc-row">
+                    <div class="kb-doc-info">
+                        <span class="kb-doc-name">{{ doc.filename }}</span>
+                        <span class="kb-doc-size">{{ doc.size_kb }} KB</span>
+                    </div>
+                    <button class="kb-delete-btn" data-filename="{{ doc.filename }}">Delete</button>
+                </div>
+                {% endfor %}
+                {% else %}
+                <p class="kb-empty">No policy documents found.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <script>
+    document.getElementById('upload-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fileInput = document.getElementById('file-input');
+        const statusEl = document.getElementById('upload-status');
+        const btn = document.getElementById('upload-btn');
+
+        if (!fileInput.files.length) return;
+
+        btn.disabled = true;
+        btn.textContent = 'Uploading...';
+        statusEl.textContent = '';
+
+        const formData = new FormData();
+        formData.append('file', fileInput.files[0]);
+
+        try {
+            const res = await fetch('/kb/upload', { method: 'POST', body: formData });
+            const data = await res.json();
+            if (res.ok) {
+                statusEl.textContent = `Uploaded ${data.filename}. Total chunks indexed: ${data.total_chunks}`;
+                statusEl.className = 'kb-status kb-success';
+                setTimeout(() => location.reload(), 1500);
+            } else {
+                statusEl.textContent = data.detail || 'Upload failed';
+                statusEl.className = 'kb-status kb-error';
+            }
+        } catch (err) {
+            statusEl.textContent = 'Network error';
+            statusEl.className = 'kb-status kb-error';
+        }
+        btn.disabled = false;
+        btn.textContent = 'Upload & Index';
+    });
+
+    document.querySelectorAll('.kb-delete-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const filename = btn.dataset.filename;
+            if (!confirm(`Delete ${filename}? This will re-index the vector store.`)) return;
+
+            btn.disabled = true;
+            btn.textContent = 'Deleting...';
+
+            const formData = new FormData();
+            formData.append('filename', filename);
+
+            try {
+                const res = await fetch('/kb/delete', { method: 'POST', body: formData });
+                if (res.ok) {
+                    location.reload();
+                } else {
+                    const data = await res.json();
+                    alert(data.detail || 'Delete failed');
+                }
+            } catch (err) {
+                alert('Network error');
+            }
+            btn.disabled = false;
+            btn.textContent = 'Delete';
+        });
+    });
+    </script>
+</body>
+</html>

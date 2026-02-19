@@ -18,6 +18,9 @@
             <span class="header-title">FrontDesk AI</span>
         </div>
         <div class="header-right">
+            {% if user == "admin@unigps.in" %}
+            <a href="/kb" class="btn-logout" style="margin-right:8px;">Knowledge Base</a>
+            {% endif %}
             <span class="user-badge">{{ user }}</span>
             <a href="/logout" class="btn-logout">Logout</a>
         </div>
@@ -190,6 +193,15 @@
             if (data.fallback_used) {
                 metaHtml += `<span class="meta-badge badge-fallback">Fallback</span>`;
             }
+            if (data.tool_calls && data.tool_calls.length) {
+                metaHtml += `<span class="meta-badge badge-tools">${data.tool_calls.length} tool call${data.tool_calls.length > 1 ? 's' : ''}</span>`;
+            }
+
+            let sourcesHtml = '';
+            if (data.sources && data.sources.length) {
+                const sourceItems = data.sources.map(s => `<span class="source-tag">${escapeHtml(s)}</span>`).join('');
+                sourcesHtml = `<div class="message-sources"><span class="sources-label">Sources:</span> ${sourceItems}</div>`;
+            }
 
             let auditHtml = '';
             if (data.audit && data.audit.length) {
@@ -203,6 +215,7 @@
             div.innerHTML = `
                 <div class="message-content">
                     <div class="message-text">${escapeHtml(data.response)}</div>
+                    ${sourcesHtml}
                     <div class="message-meta">${metaHtml}${auditHtml}</div>
                 </div>
             `;

@@ -21,7 +21,10 @@ docker build -t "${IMAGE}" -f "${REPO_DIR}/Containerfile" "${REPO_DIR}"
 echo "==> Pushing image to ${REGISTRY}"
 docker push "${IMAGE}"
 
-echo "==> Updating k8s manifests with namespace: ${NAMESPACE}"
-sed -i "s/YOURNAMESPACE/${NAMESPACE}/g" "${REPO_DIR}/k8s/deployment.yaml" "${REPO_DIR}/k8s/registry.yaml"
+echo "==> Generating k8s manifests with namespace: ${NAMESPACE}"
+echo "    Note: Source YAMLs are not modified. Use deploy.sh for full deployment."
+echo "    To apply manually:"
+echo "      sed 's/YOURNAMESPACE/${NAMESPACE}/g' k8s/deployment.yaml | kubectl apply -f -"
+echo "      sed 's/YOURNAMESPACE/${NAMESPACE}/g' k8s/registry.yaml | kubectl apply -f -"
 
-echo "==> Done. Deploy with: kubectl apply -f k8s/"
+echo "==> Done."

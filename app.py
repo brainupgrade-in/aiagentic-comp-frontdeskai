@@ -1,27 +1,40 @@
 """FrontDesk AI — Agentic AI Support System with Web UI."""
 
+import asyncio
 import os
 import sqlite3
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 
 import jwt
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, Form, HTTPException
+from fastapi import FastAPI, Request, Form, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from langgraph.checkpoint.sqlite import SqliteSaver
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
-from agents import build_graph, SupportRequest
+from agents import build_graph
+from rag import index_documents
 import observability as obs
 from observability import init_observability, get_metrics_app, get_tracer, get_langfuse_handler
 
 load_dotenv()
 
-SECRET_KEY = os.getenv("SECRET_KEY", "frontdeskai-default-secret-change-me")
-AUTH_PASSWORD = "brainupgrade"
+SECRET_KEY = os.getenv("SECRET_KEY", "")
+if not SECRET_KEY:
+    import warnings
+    warnings.warn(
+        "SECRET_KEY not set — using insecure default. Set SECRET_KEY env var in production.",
+        stacklevel=1,
+    )
+    SECRET_KEY = "frontdeskai-dev-only-not-for-production"
+
+AUTH_PASSWORD = os.getenv("AUTH_PASSWORD", "brainupgrade")
 SQLITE_DIR = os.getenv("SQLITE_DIR", "/shared/.sqlite")
 CHECKPOINT_DB = os.path.join(SQLITE_DIR, "checkpoints.db")
 HISTORY_DB = os.path.join(SQLITE_DIR, "history.db")
@@ -56,7 +69,7 @@ get_history_db().close()
 def create_token(email: str) -> str:
     payload = {
         "sub": email,
-        "exp": datetime.utcnow() + timedelta(hours=24),
+        "exp": datetime.now(timezone.utc) + timedelta(hours=24),
     }
     return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
 
@@ -84,11 +97,21 @@ graph = build_graph()
 async def lifespan(application: FastAPI):
     init_observability()
     obs.logger.info("FrontDesk AI starting up")
+    # Index policy documents into vector store on startup
+    chunk_count = index_documents()
+    obs.logger.info("RAG index ready", extra={"chunks": chunk_count})
     yield
     obs.logger.info("FrontDesk AI shutting down")
 
 
+limiter = Limiter(key_func=get_remote_address)
+
 app = FastAPI(title="FrontDesk AI", lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, lambda req, exc: JSONResponse(
+    status_code=429,
+    content={"detail": "Too many requests. Please slow down."},
+))
 app.mount("/metrics", get_metrics_app())
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
@@ -108,6 +131,7 @@ async def login_page(request: Request):
 
 
 @app.post("/login", response_class=HTMLResponse)
+@limiter.limit("5/minute")
 async def login(request: Request, email: str = Form(...), password: str = Form(...)):
     if password != AUTH_PASSWORD:
         return templates.TemplateResponse(
@@ -165,6 +189,7 @@ async def chat_page(request: Request):
 
 
 @app.post("/chat/send", response_class=JSONResponse)
+@limiter.limit("10/minute")
 async def send_message(request: Request, message: str = Form(...)):
     user = get_current_user(request)
     if not user:
@@ -177,81 +202,104 @@ async def send_message(request: Request, message: str = Form(...)):
 
     # Save user message
     conn = get_history_db()
-    conn.execute(
-        "INSERT INTO messages (email, role, content, created_at) VALUES (?, ?, ?, ?)",
-        (user, "user", message, now),
-    )
-    conn.commit()
-
-    # Extract employee name from email
-    employee_name = user.split("@")[0].replace(".", " ").title()
-
-    with tracer.start_as_current_span("chat.send") as span:
-        span.set_attribute("user.email", user)
-
-        # Run the multi-agent graph with SQLite checkpointer
-        with SqliteSaver.from_conn_string(CHECKPOINT_DB) as checkpointer:
-            compiled = graph.compile(checkpointer=checkpointer)
-            config = {"configurable": {"thread_id": user}}
-
-            # Attach Langfuse callback if configured
-            lf_handler = get_langfuse_handler(user_id=user, session_id=user)
-            if lf_handler:
-                config["callbacks"] = [lf_handler]
-
-            initial_state = {
-                "employee_name": employee_name,
-                "request": message,
-                "category": "",
-                "confidence": 0,
-                "worker_output": "",
-                "needs_escalation": False,
-                "escalation_reason": "",
-                "error": "",
-                "fallback_used": False,
-                "final_response": "",
-                "audit": [],
-            }
-
-            result = compiled.invoke(initial_state, config)
-
-        category = result.get("category", "")
-        confidence = result.get("confidence", 0)
-        escalated = result.get("needs_escalation", False)
-        fallback_used = result.get("fallback_used", False)
-        final_response = result.get("final_response", "Something went wrong.")
-        audit = result.get("audit", [])
-        audit_str = "||".join(audit)
-
-        span.set_attribute("chat.category", category)
-        span.set_attribute("chat.confidence", confidence)
-        span.set_attribute("chat.escalated", escalated)
-
-        # Record metrics
-        if obs.category_counter:
-            obs.category_counter.add(1, {"category": category})
-        if escalated and obs.escalation_counter:
-            obs.escalation_counter.add(1, {"category": category})
-        if fallback_used and obs.fallback_counter:
-            obs.fallback_counter.add(1, {"category": category})
-
-        elapsed = time.monotonic() - start
-        if obs.request_duration:
-            obs.request_duration.record(elapsed)
-
-        obs.logger.info(
-            "Chat request processed",
-            extra={"category": category, "employee": user, "duration_ms": round(elapsed * 1000, 1)},
+    try:
+        conn.execute(
+            "INSERT INTO messages (email, role, content, created_at) VALUES (?, ?, ?, ?)",
+            (user, "user", message, now),
         )
+        conn.commit()
 
-    # Save assistant response
-    conn.execute(
-        "INSERT INTO messages (email, role, content, category, confidence, escalated, fallback_used, audit, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (user, "assistant", final_response, category, confidence, int(escalated), int(fallback_used), audit_str, now),
-    )
-    conn.commit()
-    conn.close()
+        # Extract employee name from email
+        employee_name = user.split("@")[0].replace(".", " ").title()
+
+        # Load recent conversation history for multi-turn context
+        history_rows = conn.execute(
+            "SELECT role, content FROM messages WHERE email = ? ORDER BY id DESC LIMIT 20",
+            (user,),
+        ).fetchall()
+        # Reverse to chronological order (DB returns newest first)
+        conversation_history = [
+            {"role": row[0], "content": row[1]} for row in reversed(history_rows)
+        ]
+
+        with tracer.start_as_current_span("chat.send") as span:
+            span.set_attribute("user.email", user)
+            span.set_attribute("chat.history_turns", len(conversation_history))
+
+            # Run the multi-agent graph in a thread to avoid blocking the event loop
+            def run_graph():
+                with SqliteSaver.from_conn_string(CHECKPOINT_DB) as checkpointer:
+                    compiled = graph.compile(checkpointer=checkpointer)
+                    config = {"configurable": {"thread_id": user}}
+
+                    # Attach Langfuse callback if configured
+                    lf_handler = get_langfuse_handler(user_id=user, session_id=user)
+                    if lf_handler:
+                        config["callbacks"] = [lf_handler]
+
+                    initial_state = {
+                        "employee_name": employee_name,
+                        "request": message,
+                        "conversation_history": conversation_history,
+                        "category": "",
+                        "confidence": 0,
+                        "rag_context": "",
+                        "rag_sources": [],
+                        "worker_output": "",
+                        "needs_escalation": False,
+                        "escalation_reason": "",
+                        "tool_calls_made": [],
+                        "react_iterations": 0,
+                        "qa_retry_count": 0,
+                        "qa_feedback": "",
+                        "error": "",
+                        "fallback_used": False,
+                        "final_response": "",
+                        "audit": [],
+                    }
+
+                    return compiled.invoke(initial_state, config)
+
+            result = await asyncio.to_thread(run_graph)
+
+            category = result.get("category", "")
+            confidence = result.get("confidence", 0)
+            escalated = result.get("needs_escalation", False)
+            fallback_used = result.get("fallback_used", False)
+            final_response = result.get("final_response", "Something went wrong.")
+            audit = result.get("audit", [])
+            audit_str = "||".join(audit)
+
+            span.set_attribute("chat.category", category)
+            span.set_attribute("chat.confidence", confidence)
+            span.set_attribute("chat.escalated", escalated)
+
+            # Record metrics
+            if obs.category_counter:
+                obs.category_counter.add(1, {"category": category})
+            if escalated and obs.escalation_counter:
+                obs.escalation_counter.add(1, {"category": category})
+            if fallback_used and obs.fallback_counter:
+                obs.fallback_counter.add(1, {"category": category})
+
+            elapsed = time.monotonic() - start
+            if obs.request_duration:
+                obs.request_duration.record(elapsed)
+
+            obs.logger.info(
+                "Chat request processed",
+                extra={"category": category, "employee": user, "duration_ms": round(elapsed * 1000, 1)},
+            )
+
+        # Save assistant response
+        conn.execute(
+            "INSERT INTO messages (email, role, content, category, confidence, escalated, fallback_used, audit, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (user, "assistant", final_response, category, confidence, int(escalated), int(fallback_used), audit_str, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
     return {
         "response": final_response,
@@ -260,7 +308,93 @@ async def send_message(request: Request, message: str = Form(...)):
         "escalated": escalated,
         "fallback_used": fallback_used,
         "audit": audit,
+        "sources": result.get("rag_sources", []),
+        "tool_calls": result.get("tool_calls_made", []),
     }
+
+
+ADMIN_EMAIL = "admin@unigps.in"
+POLICIES_DIR = os.path.join(os.path.dirname(__file__), "data", "policies")
+
+
+@app.get("/kb", response_class=HTMLResponse)
+async def kb_page(request: Request):
+    """Knowledge base management page — admin only."""
+    user = get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+    if user != ADMIN_EMAIL:
+        raise HTTPException(status_code=403, detail="Admin access required (admin@unigps.in)")
+
+    # List current policy documents
+    import glob
+    docs = []
+    for filepath in sorted(glob.glob(os.path.join(POLICIES_DIR, "*.md"))):
+        filename = os.path.basename(filepath)
+        size = os.path.getsize(filepath)
+        docs.append({"filename": filename, "size_kb": round(size / 1024, 1)})
+
+    return templates.TemplateResponse("kb.html", {
+        "request": request,
+        "user": user,
+        "docs": docs,
+    })
+
+
+@app.post("/kb/upload", response_class=JSONResponse)
+async def kb_upload(request: Request, file: UploadFile = File(...)):
+    """Upload a new policy document — admin only. Re-indexes the vector store."""
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if user != ADMIN_EMAIL:
+        raise HTTPException(status_code=403, detail="Admin access required (admin@unigps.in)")
+
+    if not file.filename or not file.filename.endswith(".md"):
+        raise HTTPException(status_code=400, detail="Only .md (Markdown) files are accepted")
+
+    content = await file.read()
+    if len(content) > 1_000_000:  # 1MB limit
+        raise HTTPException(status_code=400, detail="File too large (max 1MB)")
+
+    os.makedirs(POLICIES_DIR, exist_ok=True)
+    filepath = os.path.join(POLICIES_DIR, file.filename)
+    with open(filepath, "wb") as f:
+        f.write(content)
+
+    # Re-index all documents
+    chunk_count = index_documents(force=True)
+    obs.logger.info(
+        "Knowledge base updated",
+        extra={"filename": file.filename, "chunks": chunk_count, "admin": user},
+    )
+
+    return {"status": "ok", "filename": file.filename, "total_chunks": chunk_count}
+
+
+@app.post("/kb/delete", response_class=JSONResponse)
+async def kb_delete(request: Request, filename: str = Form(...)):
+    """Delete a policy document — admin only. Re-indexes the vector store."""
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if user != ADMIN_EMAIL:
+        raise HTTPException(status_code=403, detail="Admin access required (admin@unigps.in)")
+
+    # Sanitize filename to prevent path traversal
+    safe_name = os.path.basename(filename)
+    filepath = os.path.join(POLICIES_DIR, safe_name)
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    os.remove(filepath)
+    chunk_count = index_documents(force=True)
+    obs.logger.info(
+        "Knowledge base document deleted",
+        extra={"filename": safe_name, "chunks": chunk_count, "admin": user},
+    )
+
+    return {"status": "ok", "deleted": safe_name, "total_chunks": chunk_count}
 
 
 @app.get("/health")

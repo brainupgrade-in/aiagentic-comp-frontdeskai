@@ -316,6 +316,7 @@ body {
 .badge-general { background: rgba(148, 163, 184, 0.2); color: var(--text-secondary); }
 .badge-escalated { background: rgba(248, 113, 113, 0.2); color: var(--red); }
 .badge-fallback { background: rgba(251, 146, 60, 0.2); color: var(--orange); }
+.badge-tools { background: rgba(34, 211, 238, 0.15); color: var(--cyan); }
 
 .meta-item {
     font-size: 12px;
@@ -461,4 +462,102 @@ body {
     .message-user .message-content,
     .message-assistant .message-content { max-width: 90%; }
     .user-badge { display: none; }
+}
+
+/* Knowledge Base Page */
+.kb-container {
+    max-width: 700px;
+    margin: 40px auto;
+    padding: 0 20px;
+}
+.kb-section {
+    background: var(--bg-secondary, #1e293b);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 24px;
+}
+.kb-section h3 {
+    color: #e2e8f0;
+    margin: 0 0 8px 0;
+    font-size: 1.1rem;
+}
+.kb-hint {
+    color: #94a3b8;
+    font-size: 0.85rem;
+    margin: 0 0 16px 0;
+}
+.kb-upload-form {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+}
+.kb-upload-form input[type="file"] {
+    flex: 1;
+    color: #e2e8f0;
+    font-size: 0.9rem;
+}
+.kb-status {
+    margin-top: 12px;
+    font-size: 0.85rem;
+    min-height: 1.2em;
+}
+.kb-success { color: #34d399; }
+.kb-error { color: #f87171; }
+.kb-doc-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid #334155;
+}
+.kb-doc-row:last-child { border-bottom: none; }
+.kb-doc-name {
+    color: #e2e8f0;
+    font-weight: 500;
+    font-size: 0.95rem;
+}
+.kb-doc-size {
+    color: #64748b;
+    font-size: 0.8rem;
+    margin-left: 12px;
+}
+.kb-delete-btn {
+    background: transparent;
+    color: #f87171;
+    border: 1px solid #f87171;
+    border-radius: 6px;
+    padding: 4px 12px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    transition: all 0.2s;
+}
+.kb-delete-btn:hover {
+    background: #f87171;
+    color: #0f172a;
+}
+.kb-empty {
+    color: #64748b;
+    font-style: italic;
+}
+
+/* Source Citations */
+.message-sources {
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px solid #334155;
+    font-size: 0.78rem;
+}
+.sources-label {
+    color: #64748b;
+    font-weight: 500;
+}
+.source-tag {
+    display: inline-block;
+    background: #1e293b;
+    color: #94a3b8;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin: 2px 4px 2px 0;
+    font-size: 0.75rem;
+    border: 1px solid #334155;
 }

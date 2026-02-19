@@ -65,137 +65,205 @@ FrontDesk AI is a multi-agent employee support desk built with FastAPI + LangGra
 ### Phase 1: Structured Output & Prompt Quality
 > Foundation fixes — make the existing agents more reliable before adding new capabilities.
 
-- [ ] **1.1 Structured output for supervisor classifier**
-  - Use `llm.with_structured_output()` with a Pydantic model for `category` + `confidence`
-  - Eliminate fragile string parsing in `agents.py:48-61`
+- [x] **1.1 Structured output for supervisor classifier** _(done 2026-02-19)_
+  - Added `Classification` Pydantic model with `category` (Literal) and `confidence` (1-10)
+  - `supervisor_llm = llm.with_structured_output(Classification)` — no more string parsing
   - File: `agents.py` — `supervisor()` function
 
-- [ ] **1.2 Use ChatPromptTemplate with system/user message roles**
-  - Replace f-string prompts with proper `SystemMessage` / `HumanMessage` separation
-  - Add few-shot examples to supervisor for consistent classification
-  - Files: `agents.py` — all worker functions
+- [x] **1.2 Use ChatPromptTemplate with system/user message roles** _(done 2026-02-19)_
+  - All prompts use `ChatPromptTemplate.from_messages()` with `SystemMessage` + `("human", ...)`
+  - Supervisor has 6 few-shot examples for consistent classification
+  - Manager prompt also converted to `ChatPromptTemplate`
+  - Files: `agents.py` — supervisor, workers, manager
 
-- [ ] **1.3 Extract worker factory to eliminate code duplication**
-  - HR, Tech, Finance, Facilities workers are nearly identical
-  - Create `make_domain_worker(name, system_prompt, escalation_rule)` factory
+- [x] **1.3 Extract worker factory to eliminate code duplication** _(done 2026-02-19)_
+  - Created `make_domain_worker(name, system_prompt, can_escalate)` factory
+  - `WORKER_CONFIGS` dict defines each domain's system prompt and escalation rule
+  - `WorkerResponse` Pydantic model replaces ESCALATE: string parsing in workers
+  - 4 workers generated from config: `hr_worker`, `tech_worker`, `finance_worker`, `facilities_worker`
   - File: `agents.py`
 
-- [ ] **1.4 Fix async blocking**
-  - Replace `compiled.invoke()` with `compiled.ainvoke()` or `asyncio.to_thread()`
-  - File: `app.py:216`
+- [x] **1.4 Fix async blocking** _(done 2026-02-19)_
+  - Wrapped `compiled.invoke()` in `asyncio.to_thread(run_graph)` so it runs in a thread pool
+  - Event loop no longer blocked during LLM calls
+  - File: `app.py` — `send_message()`
 
-- [ ] **1.5 Fix SQLite connection leak on error**
-  - Use `try/finally` or context manager for the connection in `/chat/send`
-  - File: `app.py:179-254`
+- [x] **1.5 Fix SQLite connection leak on error** _(done 2026-02-19)_
+  - Wrapped entire `/chat/send` DB usage in `try/finally: conn.close()`
+  - Also fixed deprecated `datetime.utcnow()` → `datetime.now(timezone.utc)`
+  - Removed unused `SupportRequest` import from `app.py`
+  - File: `app.py`
 
 ### Phase 2: Conversation Memory
 > Enable multi-turn conversations so agents understand context from previous messages.
 
-- [ ] **2.1 Add `messages` to SupportRequest state**
-  - Change state to include `messages: Annotated[list, add]` for conversation history
-  - File: `agents.py` — `SupportRequest` TypedDict
+- [x] **2.1 Add `conversation_history` to SupportRequest state** _(done 2026-02-19)_
+  - Added `conversation_history: list[dict]` field to `SupportRequest` TypedDict
+  - Each entry is `{"role": "user"|"assistant", "content": "..."}`
+  - Added `format_history()` helper that formats last 10 turns into readable text
+  - Added `MAX_HISTORY_TURNS = 10` constant for context window control
+  - File: `agents.py`
 
-- [ ] **2.2 Pass conversation history into agent prompts**
-  - Load last N messages from history DB before invoking the graph
-  - Include them in the initial state so agents see prior context
-  - Files: `app.py` — `send_message()`, `agents.py` — worker prompts
+- [x] **2.2 Pass conversation history into agent prompts** _(done 2026-02-19)_
+  - Supervisor prompt updated with history context + instruction to use it for references like "yes" / "that one"
+  - Worker factory prompts include history + instruction to avoid repeating prior info
+  - Manager prompt includes history for full escalation context
+  - All use `format_history(state)` via `{history}` template variable
+  - Files: `agents.py` — supervisor, worker factory, manager
 
-- [ ] **2.3 Use LangGraph message-based state**
-  - Migrate from custom state dict to LangGraph's `MessagesState` pattern
-  - Leverage the checkpointer properly for turn-by-turn accumulation
-  - Files: `agents.py`, `app.py`
+- [x] **2.3 Load conversation history in /chat/send** _(done 2026-02-19)_
+  - Fetches last 20 messages from history DB (`ORDER BY id DESC LIMIT 20`, reversed to chronological)
+  - Passes as `conversation_history` in initial graph state
+  - Added `chat.history_turns` span attribute for observability
+  - File: `app.py` — `send_message()`
 
 ### Phase 3: RAG / Knowledge Grounding
 > Ground agent responses in actual documents instead of hardcoded prompt strings.
 
-- [ ] **3.1 Create knowledge base documents**
-  - Populate `data/` with company policy documents (HR handbook, IT SLAs, finance policies, facilities guide)
-  - Format: Markdown or PDF files, one per domain
-  - Directory: `data/`
+- [x] **3.1 Create knowledge base documents** _(done 2026-02-20)_
+  - Created 4 detailed policy documents in `data/policies/`:
+    - `hr-handbook.md` — Leave policy (CL/SL/EL/maternity/paternity), WFH, attendance, insurance, onboarding, appraisals, exit
+    - `it-support.md` — SLAs (P1-P4), VPN setup/troubleshooting, software stack, hardware, security policies, AWS access
+    - `finance-policies.md` — Salary/payroll, expense reimbursement, travel policy, tax compliance, invoicing
+    - `facilities-guide.md` — Desk booking, meeting rooms, parking, cafeteria, access cards, maintenance, gym
+  - Directory: `data/policies/`
 
-- [ ] **3.2 Add vector store and embedding pipeline**
-  - Add FAISS or ChromaDB as vector store
-  - Use embedding model (Groq or HuggingFace) to index documents
-  - Create `rag.py` module for document loading, chunking, embedding, retrieval
-  - New file: `rag.py`, update `requirements.txt`
+- [x] **3.2 Add vector store and embedding pipeline** _(done 2026-02-20)_
+  - Created `rag.py` with ChromaDB persistent vector store + sentence-transformers `all-MiniLM-L6-v2` embeddings
+  - Custom text splitter respects markdown heading boundaries (no langchain dependency)
+  - Content-hash-based skip logic avoids re-indexing unchanged docs
+  - ChromaDB persists at `/shared/chromadb` (K8s PVC-backed)
+  - 77 chunks indexed from 4 policy documents
+  - Updated `requirements.txt`: added `chromadb>=0.5.0`, `sentence-transformers>=3.0.0`
+  - Updated `k8s/deployment.yaml`: volume mount changed from `/shared/.sqlite` to `/shared`
+  - New file: `rag.py`
 
-- [ ] **3.3 Integrate RAG as a tool for domain workers**
-  - Each worker retrieves relevant policy sections before generating a response
-  - Worker prompts include retrieved context: "Based on the following policy documents: ..."
-  - File: `agents.py` — all worker functions
+- [x] **3.3 Integrate RAG as graph node for domain workers** _(done 2026-02-20)_
+  - Added `rag_retrieval` node to the LangGraph between supervisor and workers
+  - Flow: supervisor → rag_retrieval → worker (category-filtered retrieval)
+  - Added `rag_context` and `rag_sources` fields to `SupportRequest` state
+  - Workers receive RAG context via `{rag_context}` template variable
+  - Worker system prompts updated: "Use the policy information provided below to give accurate, specific answers"
+  - Hardcoded policy snippets removed from worker configs — now RAG-grounded
+  - Manager prompt also receives RAG context for escalation handling
+  - File: `agents.py`
 
-- [ ] **3.4 Add source citations to responses**
-  - Include document name and section in the final response
-  - Allow users to see what policy was referenced
-  - Files: `agents.py` — `finalize()`, `templates/chat.html`
+- [x] **3.4 Add source citations to responses** _(done 2026-02-20)_
+  - `finalize()` appends "Sources: ..." line from `rag_sources` state
+  - `/chat/send` JSON response includes `sources` array
+  - `chat.html` renders source tags below assistant messages with styled badges
+  - CSS: `.message-sources`, `.source-tag` styles added
+  - Files: `agents.py`, `app.py`, `templates/chat.html`, `static/style.css`
+
+- [x] **3.5 Admin knowledge base management** _(done 2026-02-20)_ _(bonus)_
+  - Added `/kb` page (GET) for admin@unigps.in to view/manage policy documents
+  - Added `/kb/upload` (POST) to upload new .md files and auto-re-index
+  - Added `/kb/delete` (POST) to remove documents and auto-re-index
+  - Path traversal protection on delete endpoint
+  - "Knowledge Base" link in chat header for admin user
+  - New template: `templates/kb.html` with upload form and document list
+  - Files: `app.py`, `templates/kb.html`, `templates/chat.html`, `static/style.css`
 
 ### Phase 4: Tool Use / Function Calling
 > Give agents the ability to take real actions and look up real data.
 
-- [ ] **4.1 Define tool schemas**
-  - `get_leave_balance(employee_id)` — HR tool
-  - `create_jira_ticket(summary, priority)` — Tech tool
-  - `get_expense_status(claim_id)` — Finance tool
-  - `book_meeting_room(room, date, time)` — Facilities tool
+- [x] **4.1 Define tool schemas** _(done 2026-02-20)_
+  - 10 tools across 4 domains using LangChain `@tool` decorator:
+    - HR: `get_leave_balance(employee_id)`, `apply_leave(employee_id, leave_type, start_date, end_date, reason)`
+    - Tech: `create_ticket(summary, priority, category, description, created_by)`, `get_ticket_status(ticket_id)`, `list_my_tickets(employee_id)`
+    - Finance: `get_expense_status(claim_id)`, `submit_expense_claim(employee_id, amount, category, description, receipt_count)`, `get_payslip(employee_id, month)`
+    - Facilities: `check_room_availability(date)`, `book_meeting_room(room_name, date, start_time, end_time, booked_by, purpose, attendees)`
+  - `DOMAIN_TOOLS` registry maps domain name → tool list
   - New file: `tools.py`
 
-- [ ] **4.2 Implement tool stubs/mock backends**
-  - SQLite-backed mock data for leave balances, expense claims, etc.
-  - Allows demo/competition without real backend integrations
-  - New file: `tools.py`, mock data in `data/`
+- [x] **4.2 Implement proper SQLite backend with schema** _(done 2026-02-20)_
+  - Database at `/shared/.sqlite/frontdesk_tools.db` with WAL mode + FK enforcement
+  - 9 tables with proper constraints, foreign keys, indexes, and CHECK clauses:
+    - `employees` (master table, 8 seeded), `leave_balances`, `leave_requests` (overlap detection, auto-approve ≤3 days)
+    - `tickets` (sequential TECH-NNNN IDs, SLA hours per priority), `ticket_comments` (activity log with JOINs)
+    - `expense_claims` (sequential EXP-YYYY-NNNN IDs, full review workflow: draft→submitted→under_review→approved→rejected→paid)
+    - `meeting_rooms` (5 rooms with video conf flag), `room_bookings` (conflict detection, capacity validation)
+    - `payslips` (gross/deductions/net salary, 8 slips seeded for 2 months)
+  - Sequence generators: `_next_ticket_id()`, `_next_claim_id()` for auto-incrementing IDs
+  - Seeded with realistic data: 8 employees, 5 tickets with comments, 5 expense claims, 5 rooms, 4 bookings, 8 payslips
+  - File: `tools.py`
 
-- [ ] **4.3 Bind tools to LLM and enable function calling**
-  - Use `llm.bind_tools([...])` for each domain worker
-  - LLM decides when to call tools vs. respond directly
-  - File: `agents.py` — worker functions
+- [x] **4.3 Bind tools to LLM and enable function calling** _(done 2026-02-20)_
+  - Worker factory creates `tool_llm = llm.bind_tools(domain_tools)` per domain
+  - System prompt dynamically lists available tool names with usage guidance
+  - LLM decides when to call tools vs. respond directly from RAG context
+  - File: `agents.py` — `make_domain_worker()`
 
-- [ ] **4.4 Add tool execution node to the graph**
-  - Add a `ToolNode` or custom executor after worker decides to call a tool
-  - Handle tool results and feed back into the LLM for final response
-  - File: `agents.py` — `build_graph()`
+- [x] **4.4 Add tool execution loop within workers** _(done 2026-02-20)_
+  - Mini ReAct loop inside each worker: call LLM → execute tool calls → append results → re-call LLM
+  - `MAX_TOOL_ITERATIONS = 3` guard prevents infinite tool loops
+  - `_execute_tool_calls()` helper processes `AIMessage.tool_calls` and returns `ToolMessage` objects
+  - After tool loop completes, final `worker_llm.invoke()` produces structured `WorkerResponse`
+  - `tool_calls_made` tracked in state and returned in API response
+  - Tool call badges shown in chat UI
+  - Files: `agents.py`, `app.py`, `templates/chat.html`, `static/style.css`
 
 ### Phase 5: Reasoning Loop (ReAct Pattern)
 > Enable agents to think, act, observe, and iterate — making them truly agentic.
 
-- [ ] **5.1 Add ReAct loop to domain workers**
-  - Replace single-shot LLM calls with a think → act → observe cycle
-  - Agent can call tools, evaluate results, and decide next step
+- [x] **5.1 Add ReAct loop to domain workers** _(done 2026-02-20)_
+  - Worker system prompts now include explicit Think → Act → Observe instructions
+  - LLM reasons about whether it needs tools or can answer from policy docs
+  - After each tool result, LLM re-evaluates and decides next action
+  - `react_iterations` counter tracked in state for observability
+  - File: `agents.py` — `make_domain_worker()`
+
+- [x] **5.2 Add max iteration guard** _(done 2026-02-20)_
+  - `MAX_TOOL_ITERATIONS = 3` prevents runaway tool loops
+  - When exhausted, LLM receives a "summarize what you found" prompt to gracefully degrade
+  - Uses Python `for...else` pattern — `else` block fires only when loop completes without `break`
   - File: `agents.py`
 
-- [ ] **5.2 Add max iteration guard**
-  - Prevent infinite loops with a configurable max_iterations (e.g., 5)
-  - Fall back to template response if max iterations exceeded
-  - File: `agents.py`
-
-- [ ] **5.3 Add self-correction on QA failure**
-  - If QA fails, route back to the worker with the QA feedback instead of straight to fallback
-  - Allow one retry before falling back
-  - File: `agents.py` — `route_qa()`, `build_graph()`
+- [x] **5.3 Add self-correction on QA failure** _(done 2026-02-20)_
+  - Added `qa_retry_count`, `qa_feedback` fields to `SupportRequest` state
+  - `MAX_QA_RETRIES = 1` — QA can send worker back once before falling back
+  - `route_qa()` now routes to `retry_worker` on first failure, `fallback` on second
+  - New `retry_worker` graph node re-invokes the correct domain worker via `_WORKER_FNS` registry
+  - Worker detects QA feedback in state and injects a self-correction prompt
+  - QA checks enhanced: empty, too short, unhelpful without knowledge lookup
+  - Graph: `qa_check → retry_worker → escalation_check → qa_check` (one retry cycle)
+  - 14 nodes total (added `retry_worker`)
+  - Files: `agents.py`, `app.py`
 
 ### Phase 6: Guardrails & Security
 > Harden the system for production use.
 
-- [ ] **6.1 Move credentials to environment variables**
-  - `AUTH_PASSWORD` from env var, not hardcoded
-  - Ensure `SECRET_KEY` default is never used in production
-  - File: `app.py:23-24`
+- [x] **6.1 Move credentials to environment variables** _(done 2026-02-20)_
+  - `AUTH_PASSWORD` now from `os.getenv("AUTH_PASSWORD", "brainupgrade")` — env var overrides default
+  - `SECRET_KEY` emits a `UserWarning` if unset, uses clearly-named dev-only default
+  - Added `AUTH_PASSWORD` to K8s Secret (deployment.yaml + deploy.sh)
+  - Files: `app.py`, `k8s/deployment.yaml`, `k8s/deploy.sh`
 
-- [ ] **6.2 Add rate limiting**
-  - Rate limit `/login` (prevent brute force) and `/chat/send` (prevent abuse)
-  - Use `slowapi` or similar middleware
-  - File: `app.py`, update `requirements.txt`
+- [x] **6.2 Add rate limiting** _(done 2026-02-20)_
+  - Added `slowapi` rate limiter with `get_remote_address` key function
+  - `/login` POST: 5 requests/minute (brute force protection)
+  - `/chat/send` POST: 10 requests/minute (abuse prevention)
+  - Custom 429 JSON response handler
+  - Files: `app.py`, `requirements.txt` (added `slowapi>=0.1.9`)
 
-- [ ] **6.3 Add PII detection guardrail**
-  - Scan LLM responses for PII (SSN, phone, email) before sending to user
-  - Add as a step in QA check or as a separate guardrail node
-  - File: `agents.py` — `qa_check()`
+- [x] **6.3 Add PII detection guardrail** _(done 2026-02-20)_
+  - 7 PII patterns: Aadhaar, PAN, SSN, credit card, phone (intl), bank account, IFSC
+  - Whitelist regex prevents false positives on dates, ticket IDs, currency, SLA, room numbers
+  - `_detect_pii(text)` returns list of detected PII types
+  - `_redact_pii(text)` replaces matches with `[REDACTED-TYPE]` while preserving whitelisted context
+  - Integrated into `qa_check()`: PII-only issues get redacted and passed (no retry), combined issues trigger retry
+  - File: `agents.py`
 
-- [ ] **6.4 Fix K8s security context**
-  - Add `runAsNonRoot`, `readOnlyRootFilesystem`, `allowPrivilegeEscalation: false`
+- [x] **6.4 Fix K8s security context** _(done 2026-02-20)_
+  - Pod-level: `runAsNonRoot: true`, `runAsUser: 1000`, `fsGroup: 1000`
+  - Container-level: `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`
+  - Added `imagePullPolicy: Always` for `:latest` tag
   - File: `k8s/deployment.yaml`
 
-- [ ] **6.5 Fix deploy script `sed -i` mutation**
-  - Use `envsubst` or temporary files instead of mutating source YAMLs
+- [x] **6.5 Fix deploy script `sed -i` mutation** _(done 2026-02-20)_
+  - `deploy.sh`: Now uses temp files + `trap` cleanup instead of in-place `sed -i`
+  - Source YAMLs are never mutated — safe on repeated runs
+  - `build-and-push.sh`: Removed `sed -i`, prints manual instructions instead
   - Files: `k8s/deploy.sh`, `k8s/build-and-push.sh`
 
 ---
@@ -215,16 +283,16 @@ FrontDesk AI is a multi-agent employee support desk built with FastAPI + LangGra
 
 ## Progress Tracking
 
-**Last updated:** 2026-02-19
+**Last updated:** 2026-02-20
 
 | Phase | Status | Notes |
 |---|---|---|
-| Phase 1: Structured Output | Not Started | |
-| Phase 2: Conversation Memory | Not Started | |
-| Phase 3: RAG | Not Started | |
-| Phase 4: Tool Use | Not Started | |
-| Phase 5: ReAct Loop | Not Started | |
-| Phase 6: Guardrails | Not Started | |
+| Phase 1: Structured Output | **Complete** | All 5 tasks done 2026-02-19 |
+| Phase 2: Conversation Memory | **Complete** | All 3 tasks done 2026-02-19 |
+| Phase 3: RAG | **Complete** | All 4 tasks + bonus KB admin done 2026-02-20 |
+| Phase 4: Tool Use | **Complete** | All 4 tasks done 2026-02-20 |
+| Phase 5: ReAct Loop | **Complete** | All 3 tasks done 2026-02-20 |
+| Phase 6: Guardrails | **Complete** | All 5 tasks done 2026-02-20 |
 
 ---
 

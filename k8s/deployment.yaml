@@ -18,9 +18,20 @@ spec:
         prometheus.io/port: "8000"
         prometheus.io/path: "/metrics"
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
       containers:
         - name: frontdeskai
           image: YOURNAMESPACE-registry.brainupgrade.in/frontdeskai:latest
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
           ports:
             - containerPort: 8000
           env:
@@ -34,6 +45,11 @@ spec:
                 secretKeyRef:
                   name: frontdeskai-secret
                   key: SECRET_KEY
+            - name: AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: frontdeskai-secret
+                  key: AUTH_PASSWORD
             # Langfuse config
             - name: LANGFUSE_SECRET_KEY
               valueFrom:
@@ -62,7 +78,7 @@ spec:
               value: "INFO"
           volumeMounts:
             - name: sqlite-data
-              mountPath: /shared/.sqlite
+              mountPath: /shared
           livenessProbe:
             httpGet:
               path: /health
