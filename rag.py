@@ -13,8 +13,10 @@ import chromadb
 from chromadb.config import Settings
 from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
 
-# Directories
-POLICIES_DIR = os.path.join(os.path.dirname(__file__), "data", "policies")
+# Directories — policies live on writable storage (PVC), not inside the image
+_SQLITE_DIR = os.getenv("SQLITE_DIR", "/shared/.sqlite")
+POLICIES_DIR = os.path.join(os.path.dirname(_SQLITE_DIR), ".frontdeskai", "policies")
+_SEED_POLICIES_DIR = os.path.join(os.path.dirname(__file__), "data", "policies")
 CHROMA_DIR = os.getenv("CHROMA_DIR", "/shared/chromadb")
 COLLECTION_NAME = "unigps_policies"
 
@@ -28,6 +30,19 @@ TOP_K = 4
 # Module-level singletons
 _collection = None
 _embed_fn = None
+
+
+def _seed_policies():
+    """Copy bundled seed policy docs to writable POLICIES_DIR if it's empty or missing."""
+    import shutil
+    os.makedirs(POLICIES_DIR, exist_ok=True)
+    existing = glob.glob(os.path.join(POLICIES_DIR, "*.md"))
+    if existing:
+        return  # already has docs, don't overwrite
+    seed_files = glob.glob(os.path.join(_SEED_POLICIES_DIR, "*.md"))
+    for src in seed_files:
+        dst = os.path.join(POLICIES_DIR, os.path.basename(src))
+        shutil.copy2(src, dst)
 
 
 def _get_embed_fn():
@@ -93,8 +108,9 @@ def index_documents(force: bool = False) -> int:
     """Load, chunk, embed, and store policy documents. Returns number of chunks indexed.
 
     Skips re-indexing if the docs haven't changed (based on content hash),
-    unless force=True.
+    unless force=True. Seeds bundled policy docs on first run.
     """
+    _seed_policies()
     collection = _get_collection()
 
     current_hash = _compute_docs_hash()

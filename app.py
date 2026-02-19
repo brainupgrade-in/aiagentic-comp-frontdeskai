@@ -17,7 +17,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 from agents import build_graph
 from auth import get_user_password, set_user_password, verify_password, current_user_email, _get_auth_db
-from rag import index_documents
+from rag import index_documents, POLICIES_DIR
 from skills import load_all_skills
 from tools import HISTORY_DB
 import observability as obs
@@ -499,7 +499,6 @@ async def chat_feedback(request: Request):
 ADMIN_EMAILS = set(
     e.strip() for e in os.getenv("ADMIN_EMAILS", "admin@unigps.in").split(",") if e.strip()
 )
-POLICIES_DIR = os.path.join(os.path.dirname(__file__), "data", "policies")
 
 
 def _require_admin(user: str | None) -> str:
