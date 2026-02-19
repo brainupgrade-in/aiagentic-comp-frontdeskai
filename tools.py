@@ -454,7 +454,9 @@ def apply_leave(employee_id: str, leave_type: str, start_date: str, end_date: st
         if not row:
             return f"Employee '{employee_id}' not found in the system."
 
-        col = f"{leave_type}_leave" if leave_type != "wfh" else "wfh_days"
+        # Explicit mapping — never construct column names from input
+        _LEAVE_COLUMNS = {"casual": "casual_leave", "sick": "sick_leave", "earned": "earned_leave", "wfh": "wfh_days"}
+        col = _LEAVE_COLUMNS[leave_type]  # safe: leave_type already validated above
         available = row[col]
         if days > available:
             return f"Insufficient {leave_type} leave. Requested {days} days but only {available} remaining."
@@ -867,32 +869,34 @@ def _get_history_db() -> sqlite3.Connection:
 @tool
 def get_conversation_stats(period: str = "all") -> str:
     """Get conversation volume and quality metrics. period: 'today', 'week', 'month', or 'all'."""
+    # Whitelist valid periods — no user input reaches SQL
+    _PERIOD_FILTERS = {
+        "today": "AND date(created_at) = date('now')",
+        "week":  "AND date(created_at) >= date('now', '-7 days')",
+        "month": "AND date(created_at) >= date('now', '-30 days')",
+        "all":   "",
+    }
+    if period not in _PERIOD_FILTERS:
+        period = "all"
+    date_filter = _PERIOD_FILTERS[period]
+
     conn = _get_history_db()
     try:
-        where = ""
-        if period == "today":
-            where = "WHERE date(created_at) = date('now')"
-        elif period == "week":
-            where = "WHERE date(created_at) >= date('now', '-7 days')"
-        elif period == "month":
-            where = "WHERE date(created_at) >= date('now', '-30 days')"
-
         # Total messages and unique users
         row = conn.execute(
-            f"SELECT COUNT(*) as total, COUNT(DISTINCT email) as users "
-            f"FROM messages {where}"
+            "SELECT COUNT(*) as total, COUNT(DISTINCT email) as users "
+            "FROM messages WHERE 1=1 " + date_filter
         ).fetchone()
         total = row["total"]
         users = row["users"]
 
-        # Messages by role
-        assistant_where = where.replace("WHERE", "WHERE role='assistant' AND") if where else "WHERE role='assistant'"
+        # Quality metrics from assistant messages
         stats = conn.execute(
-            f"SELECT COUNT(*) as cnt, "
-            f"SUM(CASE WHEN escalated=1 THEN 1 ELSE 0 END) as escalated, "
-            f"SUM(CASE WHEN fallback_used=1 THEN 1 ELSE 0 END) as fallbacks, "
-            f"AVG(confidence) as avg_conf "
-            f"FROM messages {assistant_where}"
+            "SELECT COUNT(*) as cnt, "
+            "SUM(CASE WHEN escalated=1 THEN 1 ELSE 0 END) as escalated, "
+            "SUM(CASE WHEN fallback_used=1 THEN 1 ELSE 0 END) as fallbacks, "
+            "AVG(confidence) as avg_conf "
+            "FROM messages WHERE role='assistant' " + date_filter
         ).fetchone()
         responses = stats["cnt"] or 0
         escalated = stats["escalated"] or 0
@@ -904,8 +908,9 @@ def get_conversation_stats(period: str = "all") -> str:
 
         # Category breakdown
         cats = conn.execute(
-            f"SELECT category, COUNT(*) as cnt FROM messages "
-            f"{assistant_where} AND COALESCE(category, '') != '' GROUP BY category ORDER BY cnt DESC"
+            "SELECT category, COUNT(*) as cnt FROM messages "
+            "WHERE role='assistant' AND COALESCE(category, '') != '' " + date_filter +
+            " GROUP BY category ORDER BY cnt DESC"
         ).fetchall()
         cat_lines = [f"  {c['category']}: {c['cnt']}" for c in cats]
 
@@ -1030,6 +1035,38 @@ def get_room_utilization() -> str:
 ANALYTICS_TOOLS = [get_conversation_stats, get_ticket_summary, get_expense_summary, get_leave_summary, get_room_utilization]
 
 
+# ========== ACCOUNT TOOLS ==========
+
+@tool
+def change_my_password(current_password: str, new_password: str) -> str:
+    """Change the logged-in user's password. Requires their current password for verification."""
+    from auth import current_user_email, verify_password, set_user_password, get_user_password
+
+    try:
+        email = current_user_email.get()
+    except LookupError:
+        return "Unable to determine your identity. Please log out and log back in."
+
+    if len(new_password) < 8:
+        return "New password must be at least 8 characters long."
+
+    if current_password == new_password:
+        return "New password must be different from your current password."
+
+    user = get_user_password(email)
+    if not user:
+        return "No password record found. Please log out and log back in to initialize your account."
+
+    if not verify_password(current_password, user["password_hash"], user["password_salt"]):
+        return "Current password is incorrect. Please try again."
+
+    set_user_password(email, new_password)
+    return "Password changed successfully! Please use your new password next time you log in."
+
+
+ACCOUNT_TOOLS = [change_my_password]
+
+
 # ========== TOOL REGISTRY ==========
 
 HR_TOOLS = [get_leave_balance, apply_leave]
@@ -1043,4 +1080,5 @@ DOMAIN_TOOLS = {
     "finance": FINANCE_TOOLS,
     "facilities": FACILITIES_TOOLS,
     "analytics": ANALYTICS_TOOLS,
+    "account": ACCOUNT_TOOLS,
 }

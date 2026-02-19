@@ -18,7 +18,7 @@
             <span class="header-title">FrontDesk AI</span>
         </div>
         <div class="header-right">
-            {% if user == "admin@unigps.in" %}
+            {% if is_admin %}
             <a href="/analytics" class="btn-logout">Analytics</a>
             <a href="/kb" class="btn-logout">Knowledge Base</a>
             {% endif %}

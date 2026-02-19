@@ -19,6 +19,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 from agents import build_graph
+from auth import get_user_password, set_user_password, verify_password, current_user_email, _get_auth_db
 from rag import index_documents
 from tools import HISTORY_DB
 import observability as obs
@@ -28,12 +29,15 @@ load_dotenv()
 
 SECRET_KEY = os.getenv("SECRET_KEY", "")
 if not SECRET_KEY:
+    if os.getenv("ENV") == "production":
+        raise RuntimeError("SECRET_KEY must be set in production. Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(32))\"")
+    import secrets as _secrets
+    SECRET_KEY = _secrets.token_urlsafe(32)
     import warnings
     warnings.warn(
-        "SECRET_KEY not set — using insecure default. Set SECRET_KEY env var in production.",
+        "SECRET_KEY not set — generated random key for this session. Tokens will not survive restart.",
         stacklevel=1,
     )
-    SECRET_KEY = "frontdeskai-dev-only-not-for-production"
 
 AUTH_PASSWORD = os.getenv("AUTH_PASSWORD", "brainupgrade")
 SQLITE_DIR = os.getenv("SQLITE_DIR", "/shared/.sqlite")
@@ -65,6 +69,8 @@ def get_history_db():
 
 # Initialize history table on import
 get_history_db().close()
+# Initialize auth (users) table on import
+_get_auth_db().close()
 
 
 def create_token(email: str) -> str:
@@ -78,7 +84,10 @@ def create_token(email: str) -> str:
 def verify_token(token: str) -> str | None:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-        return payload["sub"]
+        email = payload.get("sub")
+        if not email or not isinstance(email, str) or "@" not in email:
+            return None
+        return email
     except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
         return None
 
@@ -113,6 +122,19 @@ app.add_exception_handler(RateLimitExceeded, lambda req, exc: JSONResponse(
     status_code=429,
     content={"detail": "Too many requests. Please slow down."},
 ))
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; frame-ancestors 'none'"
+    )
+    return response
+
 app.mount("/metrics", get_metrics_app())
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
@@ -134,17 +156,30 @@ async def login_page(request: Request):
 @app.post("/login", response_class=HTMLResponse)
 @limiter.limit("5/minute")
 async def login(request: Request, email: str = Form(...), password: str = Form(...)):
-    if password != AUTH_PASSWORD:
-        return templates.TemplateResponse(
-            "login.html", {"request": request, "error": "Invalid password"}
-        )
     if not email or "@" not in email:
         return templates.TemplateResponse(
-            "login.html", {"request": request, "error": "Enter a valid email address"}
+            "login.html", {"request": request, "error": "Invalid email or password"}
         )
+
+    # Check for per-user stored password first
+    user_record = get_user_password(email)
+    if user_record:
+        # User has a stored password — verify against it
+        if not verify_password(password, user_record["password_hash"], user_record["password_salt"]):
+            return templates.TemplateResponse(
+                "login.html", {"request": request, "error": "Invalid email or password"}
+            )
+    else:
+        # No stored password — verify against shared AUTH_PASSWORD, then save
+        if password != AUTH_PASSWORD:
+            return templates.TemplateResponse(
+                "login.html", {"request": request, "error": "Invalid email or password"}
+            )
+        set_user_password(email, password)
+
     token = create_token(email)
     response = RedirectResponse(url="/chat", status_code=302)
-    response.set_cookie(key="token", value=token, httponly=True, max_age=86400)
+    response.set_cookie(key="token", value=token, httponly=True, samesite="strict", max_age=86400)
     return response
 
 
@@ -185,6 +220,7 @@ async def chat_page(request: Request):
     return templates.TemplateResponse("chat.html", {
         "request": request,
         "user": user,
+        "is_admin": user in ADMIN_EMAILS,
         "messages": messages,
     })
 
@@ -195,6 +231,13 @@ async def send_message(request: Request, message: str = Form(...)):
     user = get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
+
+    # Input validation — reject empty or excessively long messages
+    message = message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    if len(message) > 5000:
+        raise HTTPException(status_code=400, detail="Message too long (max 5000 characters)")
 
     start = time.monotonic()
     tracer = get_tracer()
@@ -261,11 +304,17 @@ async def send_message(request: Request, message: str = Form(...)):
 
                     return compiled.invoke(initial_state, config)
 
+            # Set the authenticated user email for tools (e.g. change_my_password)
+            current_user_email.set(user)
+
             result = await asyncio.to_thread(run_graph)
 
+            _VALID_CATEGORIES = {"hr", "tech", "finance", "facilities", "analytics", "account", "general"}
             category = result.get("category", "")
-            confidence = result.get("confidence", 0)
-            escalated = result.get("needs_escalation", False)
+            if category not in _VALID_CATEGORIES:
+                category = "general"
+            confidence = max(0, min(10, int(result.get("confidence", 0))))
+            escalated = bool(result.get("needs_escalation", False))
             fallback_used = result.get("fallback_used", False)
             final_response = result.get("final_response", "Something went wrong.")
             audit = result.get("audit", [])
@@ -302,20 +351,35 @@ async def send_message(request: Request, message: str = Form(...)):
     finally:
         conn.close()
 
-    return {
+    response_data: dict = {
         "response": final_response,
         "category": category,
         "confidence": confidence,
         "escalated": escalated,
         "fallback_used": fallback_used,
-        "audit": audit,
         "sources": result.get("rag_sources", []),
-        "tool_calls": result.get("tool_calls_made", []),
     }
+    # Only expose internal details (audit trail, tool calls) to admins
+    if user in ADMIN_EMAILS:
+        response_data["audit"] = audit
+        response_data["tool_calls"] = result.get("tool_calls_made", [])
+
+    return response_data
 
 
-ADMIN_EMAIL = "admin@unigps.in"
+ADMIN_EMAILS = set(
+    e.strip() for e in os.getenv("ADMIN_EMAILS", "admin@unigps.in").split(",") if e.strip()
+)
 POLICIES_DIR = os.path.join(os.path.dirname(__file__), "data", "policies")
+
+
+def _require_admin(user: str | None) -> str:
+    """Validate user is authenticated and is an admin. Returns user email or raises."""
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if user not in ADMIN_EMAILS:
+        raise HTTPException(status_code=403, detail="Access denied")
+    return user
 
 
 @app.get("/kb", response_class=HTMLResponse)
@@ -324,8 +388,7 @@ async def kb_page(request: Request):
     user = get_current_user(request)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
-    if user != ADMIN_EMAIL:
-        raise HTTPException(status_code=403, detail="Admin access required (admin@unigps.in)")
+    _require_admin(user)
 
     # List current policy documents
     import glob
@@ -343,13 +406,10 @@ async def kb_page(request: Request):
 
 
 @app.post("/kb/upload", response_class=JSONResponse)
+@limiter.limit("5/hour")
 async def kb_upload(request: Request, file: UploadFile = File(...)):
     """Upload a new policy document — admin only. Re-indexes the vector store."""
-    user = get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    if user != ADMIN_EMAIL:
-        raise HTTPException(status_code=403, detail="Admin access required (admin@unigps.in)")
+    user = _require_admin(get_current_user(request))
 
     if not file.filename or not file.filename.endswith(".md"):
         raise HTTPException(status_code=400, detail="Only .md (Markdown) files are accepted")
@@ -358,8 +418,19 @@ async def kb_upload(request: Request, file: UploadFile = File(...)):
     if len(content) > 1_000_000:  # 1MB limit
         raise HTTPException(status_code=400, detail="File too large (max 1MB)")
 
+    # Validate content is valid UTF-8 text (not a binary disguised as .md)
+    try:
+        content.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="File is not valid UTF-8 text")
+
+    # Sanitize filename — prevent path traversal
+    safe_filename = os.path.basename(file.filename)
     os.makedirs(POLICIES_DIR, exist_ok=True)
-    filepath = os.path.join(POLICIES_DIR, file.filename)
+    filepath = os.path.abspath(os.path.join(POLICIES_DIR, safe_filename))
+    if not filepath.startswith(os.path.abspath(POLICIES_DIR)):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
     with open(filepath, "wb") as f:
         f.write(content)
 
@@ -367,24 +438,26 @@ async def kb_upload(request: Request, file: UploadFile = File(...)):
     chunk_count = index_documents(force=True)
     obs.logger.info(
         "Knowledge base updated",
-        extra={"filename": file.filename, "chunks": chunk_count, "admin": user},
+        extra={"filename": safe_filename, "chunks": chunk_count, "admin": user},
     )
 
-    return {"status": "ok", "filename": file.filename, "total_chunks": chunk_count}
+    return {"status": "ok", "filename": safe_filename, "total_chunks": chunk_count}
 
 
 @app.post("/kb/delete", response_class=JSONResponse)
+@limiter.limit("10/hour")
 async def kb_delete(request: Request, filename: str = Form(...)):
     """Delete a policy document — admin only. Re-indexes the vector store."""
-    user = get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    if user != ADMIN_EMAIL:
-        raise HTTPException(status_code=403, detail="Admin access required (admin@unigps.in)")
+    user = _require_admin(get_current_user(request))
+
+    if not filename.endswith(".md"):
+        raise HTTPException(status_code=400, detail="Only .md files can be deleted")
 
     # Sanitize filename to prevent path traversal
     safe_name = os.path.basename(filename)
-    filepath = os.path.join(POLICIES_DIR, safe_name)
+    filepath = os.path.abspath(os.path.join(POLICIES_DIR, safe_name))
+    if not filepath.startswith(os.path.abspath(POLICIES_DIR)):
+        raise HTTPException(status_code=400, detail="Invalid filename")
     if not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="Document not found")
 
@@ -404,19 +477,15 @@ async def analytics_page(request: Request):
     user = get_current_user(request)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
-    if user != ADMIN_EMAIL:
-        raise HTTPException(status_code=403, detail="Admin access required (admin@unigps.in)")
+    _require_admin(user)
     return templates.TemplateResponse("analytics.html", {"request": request, "user": user})
 
 
 @app.get("/analytics/data", response_class=JSONResponse)
+@limiter.limit("30/minute")
 async def analytics_data(request: Request):
     """JSON API returning all analytics metrics — admin only."""
-    user = get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    if user != ADMIN_EMAIL:
-        raise HTTPException(status_code=403, detail="Admin access required")
+    user = _require_admin(get_current_user(request))
 
     from tools import _get_db as get_tools_db
 
