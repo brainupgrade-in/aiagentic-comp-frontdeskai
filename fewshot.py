@@ -7,8 +7,9 @@ to incoming queries.
 
 import chromadb
 from chromadb.config import Settings
+from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
 
-from rag import _get_model, CHROMA_DIR
+from rag import CHROMA_DIR
 
 import os
 
@@ -16,6 +17,14 @@ FEWSHOT_COLLECTION = "fewshot_examples"
 SIMILARITY_THRESHOLD = 0.3
 
 _fewshot_collection = None
+_embed_fn = None
+
+
+def _get_embed_fn():
+    global _embed_fn
+    if _embed_fn is None:
+        _embed_fn = DefaultEmbeddingFunction()
+    return _embed_fn
 
 
 def _get_collection():
@@ -29,6 +38,7 @@ def _get_collection():
         _fewshot_collection = client.get_or_create_collection(
             name=FEWSHOT_COLLECTION,
             metadata={"hnsw:space": "cosine"},
+            embedding_function=_get_embed_fn(),
         )
     return _fewshot_collection
 
@@ -36,11 +46,8 @@ def _get_collection():
 def add_example(example_id: str, question: str, answer: str, category: str, confidence: int) -> None:
     """Upsert a successful Q&A pair into the few-shot collection."""
     collection = _get_collection()
-    model = _get_model()
-    vector = model.encode(question).tolist()
     collection.upsert(
         ids=[example_id],
-        embeddings=[vector],
         documents=[question],
         metadatas=[{
             "answer": answer[:1000],  # cap stored answer length
@@ -69,11 +76,8 @@ def retrieve_examples(query: str, category: str, top_k: int = 2) -> list[dict]:
     if collection.count() == 0:
         return []
 
-    model = _get_model()
-    query_vector = model.encode(query).tolist()
-
     results = collection.query(
-        query_embeddings=[query_vector],
+        query_texts=[query],
         n_results=top_k,
         where={"category": category},
         include=["documents", "metadatas", "distances"],

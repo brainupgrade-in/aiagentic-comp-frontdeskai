@@ -1,6 +1,6 @@
 """RAG pipeline: load policy documents, embed, store in ChromaDB, retrieve.
 
-Uses sentence-transformers directly (no langchain dependency) for embeddings
+Uses ChromaDB's built-in default embedding function (ONNX-based, no torch required)
 and a simple text splitter for chunking.
 """
 
@@ -11,15 +11,12 @@ import hashlib
 
 import chromadb
 from chromadb.config import Settings
-from sentence_transformers import SentenceTransformer
+from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
 
 # Directories
 POLICIES_DIR = os.path.join(os.path.dirname(__file__), "data", "policies")
 CHROMA_DIR = os.getenv("CHROMA_DIR", "/shared/chromadb")
 COLLECTION_NAME = "unigps_policies"
-
-# Embedding model — small, fast, runs on CPU
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 # Chunking config
 CHUNK_SIZE = 500
@@ -30,14 +27,14 @@ TOP_K = 4
 
 # Module-level singletons
 _collection = None
-_model = None
+_embed_fn = None
 
 
-def _get_model() -> SentenceTransformer:
-    global _model
-    if _model is None:
-        _model = SentenceTransformer(EMBEDDING_MODEL)
-    return _model
+def _get_embed_fn():
+    global _embed_fn
+    if _embed_fn is None:
+        _embed_fn = DefaultEmbeddingFunction()
+    return _embed_fn
 
 
 def _get_collection():
@@ -51,6 +48,7 @@ def _get_collection():
         _collection = client.get_or_create_collection(
             name=COLLECTION_NAME,
             metadata={"hnsw:space": "cosine"},
+            embedding_function=_get_embed_fn(),
         )
     return _collection
 
@@ -98,7 +96,6 @@ def index_documents(force: bool = False) -> int:
     unless force=True.
     """
     collection = _get_collection()
-    model = _get_model()
 
     current_hash = _compute_docs_hash()
     hash_path = os.path.join(CHROMA_DIR, ".docs_hash")
@@ -152,16 +149,12 @@ def index_documents(force: bool = False) -> int:
     if existing["ids"]:
         collection.delete(ids=existing["ids"])
 
-    # Embed all chunks
-    vectors = model.encode(all_chunks, show_progress_bar=False).tolist()
-
-    # Add to ChromaDB in batches
+    # Add to ChromaDB in batches (ChromaDB embeds via its embedding_function)
     batch_size = 500
     for start in range(0, len(all_chunks), batch_size):
         end = start + batch_size
         collection.add(
             ids=all_ids[start:end],
-            embeddings=vectors[start:end],
             documents=all_chunks[start:end],
             metadatas=all_metadatas[start:end],
         )
@@ -185,12 +178,9 @@ def retrieve(query: str, category: str = "", top_k: int = TOP_K) -> list[dict]:
         List of dicts with keys: content, source, section, score.
     """
     collection = _get_collection()
-    model = _get_model()
 
     if collection.count() == 0:
         return []
-
-    query_vector = model.encode(query).tolist()
 
     # Map category to source filename for filtering
     category_to_file = {
@@ -205,7 +195,7 @@ def retrieve(query: str, category: str = "", top_k: int = TOP_K) -> list[dict]:
         where_filter = {"filename": category_to_file[category]}
 
     results = collection.query(
-        query_embeddings=[query_vector],
+        query_texts=[query],
         n_results=top_k,
         where=where_filter,
         include=["documents", "metadatas", "distances"],
