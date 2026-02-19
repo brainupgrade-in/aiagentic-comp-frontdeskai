@@ -19,8 +19,8 @@
         </div>
         <div class="header-right">
             {% if user == "admin@unigps.in" %}
-            <a href="/analytics" class="btn-logout" style="margin-right:8px;">Analytics</a>
-            <a href="/kb" class="btn-logout" style="margin-right:8px;">Knowledge Base</a>
+            <a href="/analytics" class="btn-logout">Analytics</a>
+            <a href="/kb" class="btn-logout">Knowledge Base</a>
             {% endif %}
             <span class="user-badge">{{ user }}</span>
             <a href="/logout" class="btn-logout">Logout</a>
@@ -182,8 +182,10 @@
             div.className = 'message message-assistant';
 
             let metaHtml = '';
+            const safeCategories = ['hr','tech','finance','facilities','analytics','general'];
             if (data.category) {
-                metaHtml += `<span class="meta-badge badge-${data.category}">${data.category.toUpperCase()}</span>`;
+                const badgeCls = safeCategories.includes(data.category) ? data.category : 'general';
+                metaHtml += `<span class="meta-badge badge-${badgeCls}">${escapeHtml(data.category.toUpperCase())}</span>`;
             }
             if (data.confidence) {
                 metaHtml += `<span class="meta-item">Confidence: ${data.confidence}/10</span>`;

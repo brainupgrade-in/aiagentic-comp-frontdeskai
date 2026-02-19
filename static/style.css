@@ -313,10 +313,13 @@ body {
 .badge-tech { background: rgba(34, 211, 238, 0.2); color: var(--cyan); }
 .badge-finance { background: rgba(52, 211, 153, 0.2); color: var(--green); }
 .badge-facilities { background: rgba(251, 191, 36, 0.2); color: var(--yellow); }
+.badge-analytics { background: rgba(167, 139, 250, 0.2); color: #a78bfa; }
 .badge-general { background: rgba(148, 163, 184, 0.2); color: var(--text-secondary); }
 .badge-escalated { background: rgba(248, 113, 113, 0.2); color: var(--red); }
 .badge-fallback { background: rgba(251, 146, 60, 0.2); color: var(--orange); }
 .badge-tools { background: rgba(34, 211, 238, 0.15); color: var(--cyan); }
+.badge-expense-submitted { background: rgba(251, 191, 36, 0.2); color: var(--yellow); }
+.badge-expense-under_review { background: rgba(251, 146, 60, 0.2); color: var(--orange); }
 
 .meta-item {
     font-size: 12px;
@@ -709,5 +712,9 @@ body {
 @media (max-width: 640px) {
     .analytics-main { padding: 16px; }
     .analytics-row-2col { grid-template-columns: 1fr; }
-    .analytics-bar-label { width: 70px; font-size: 12px; }
+    .analytics-bar-label { width: 60px; font-size: 11px; }
+    .analytics-bar-value { width: 28px; font-size: 12px; }
+    .analytics-table { font-size: 12px; }
+    .analytics-table th,
+    .analytics-table td { padding: 6px 6px; }
 }

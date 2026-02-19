@@ -15,12 +15,13 @@
                 <circle cx="36" cy="32" r="6" fill="#22d3ee"/>
                 <path d="M34 32l2 2 3-3" stroke="white" stroke-width="1.5" fill="none"/>
             </svg>
-            <h2>Knowledge Base</h2>
+            <span class="header-title">FrontDesk AI — Knowledge Base</span>
         </div>
         <div class="header-right">
-            <span class="user-email">{{ user }}</span>
-            <a href="/chat" class="logout-btn">Back to Chat</a>
-            <a href="/logout" class="logout-btn">Logout</a>
+            <a href="/chat" class="btn-logout">Chat</a>
+            <a href="/analytics" class="btn-logout">Analytics</a>
+            <span class="user-badge">{{ user }}</span>
+            <a href="/logout" class="btn-logout">Logout</a>
         </div>
     </header>
 

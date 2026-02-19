@@ -20,6 +20,7 @@ from slowapi.errors import RateLimitExceeded
 
 from agents import build_graph
 from rag import index_documents
+from tools import HISTORY_DB
 import observability as obs
 from observability import init_observability, get_metrics_app, get_tracer, get_langfuse_handler
 
@@ -37,13 +38,13 @@ if not SECRET_KEY:
 AUTH_PASSWORD = os.getenv("AUTH_PASSWORD", "brainupgrade")
 SQLITE_DIR = os.getenv("SQLITE_DIR", "/shared/.sqlite")
 CHECKPOINT_DB = os.path.join(SQLITE_DIR, "checkpoints.db")
-HISTORY_DB = os.path.join(SQLITE_DIR, "history.db")
 
 os.makedirs(SQLITE_DIR, exist_ok=True)
 
 
 def get_history_db():
     conn = sqlite3.connect(HISTORY_DB)
+    conn.row_factory = sqlite3.Row
     conn.execute(
         """CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -171,14 +172,14 @@ async def chat_page(request: Request):
     messages = []
     for row in rows:
         messages.append({
-            "role": row[0],
-            "content": row[1],
-            "category": row[2],
-            "confidence": row[3],
-            "escalated": bool(row[4]),
-            "fallback_used": bool(row[5]),
-            "audit": row[6].split("||") if row[6] else [],
-            "created_at": row[7],
+            "role": row["role"],
+            "content": row["content"],
+            "category": row["category"],
+            "confidence": row["confidence"],
+            "escalated": bool(row["escalated"]),
+            "fallback_used": bool(row["fallback_used"]),
+            "audit": row["audit"].split("||") if row["audit"] else [],
+            "created_at": row["created_at"],
         })
 
     return templates.TemplateResponse("chat.html", {
@@ -219,7 +220,7 @@ async def send_message(request: Request, message: str = Form(...)):
         ).fetchall()
         # Reverse to chronological order (DB returns newest first)
         conversation_history = [
-            {"role": row[0], "content": row[1]} for row in reversed(history_rows)
+            {"role": row["role"], "content": row["content"]} for row in reversed(history_rows)
         ]
 
         with tracer.start_as_current_span("chat.send") as span:
@@ -425,14 +426,14 @@ async def analytics_data(request: Request):
     conn = get_history_db()
     try:
         row = conn.execute("SELECT COUNT(*) as total, COUNT(DISTINCT email) as users FROM messages").fetchone()
-        data["total_messages"] = row[0]
-        data["unique_users"] = row[1]
+        data["total_messages"] = row["total"]
+        data["unique_users"] = row["users"]
 
-        row = conn.execute("SELECT COUNT(*) FROM messages WHERE date(created_at) = date('now')").fetchone()
-        data["messages_today"] = row[0]
+        row = conn.execute("SELECT COUNT(*) as cnt FROM messages WHERE date(created_at) = date('now')").fetchone()
+        data["messages_today"] = row["cnt"]
 
-        row = conn.execute("SELECT COUNT(*) FROM messages WHERE date(created_at) >= date('now', '-7 days')").fetchone()
-        data["messages_week"] = row[0]
+        row = conn.execute("SELECT COUNT(*) as cnt FROM messages WHERE date(created_at) >= date('now', '-7 days')").fetchone()
+        data["messages_week"] = row["cnt"]
 
         # Quality metrics from assistant messages
         qrow = conn.execute(
@@ -442,17 +443,17 @@ async def analytics_data(request: Request):
             "AVG(confidence) as avg_conf "
             "FROM messages WHERE role='assistant'"
         ).fetchone()
-        responses = qrow[0] or 0
-        data["escalation_rate"] = round((qrow[1] or 0) / responses * 100, 1) if responses else 0
-        data["fallback_rate"] = round((qrow[2] or 0) / responses * 100, 1) if responses else 0
-        data["avg_confidence"] = round(qrow[3] or 0, 1)
+        responses = qrow["cnt"] or 0
+        data["escalation_rate"] = round((qrow["escalated"] or 0) / responses * 100, 1) if responses else 0
+        data["fallback_rate"] = round((qrow["fallbacks"] or 0) / responses * 100, 1) if responses else 0
+        data["avg_confidence"] = round(qrow["avg_conf"] or 0, 1)
 
         # Category distribution
         cats = conn.execute(
             "SELECT category, COUNT(*) as cnt FROM messages "
-            "WHERE role='assistant' AND category != '' GROUP BY category ORDER BY cnt DESC"
+            "WHERE role='assistant' AND COALESCE(category, '') != '' GROUP BY category ORDER BY cnt DESC"
         ).fetchall()
-        data["categories"] = [{"name": c[0], "count": c[1]} for c in cats]
+        data["categories"] = [{"name": c["category"], "count": c["cnt"]} for c in cats]
     finally:
         conn.close()
 
@@ -470,26 +471,26 @@ async def analytics_data(request: Request):
 
         # Pending expenses
         expenses = tconn.execute(
-            "SELECT ec.claim_id, e.full_name, ec.amount, ec.category, ec.status "
+            "SELECT ec.claim_id, e.full_name, ec.amount, ec.category, ec.status, ec.submitted_at "
             "FROM expense_claims ec JOIN employees e ON ec.employee_id = e.employee_id "
             "WHERE ec.status IN ('submitted','under_review') ORDER BY ec.submitted_at"
         ).fetchall()
         data["pending_expenses"] = [
             {"claim_id": r["claim_id"], "employee": r["full_name"], "amount": r["amount"],
-             "category": r["category"], "status": r["status"]}
+             "category": r["category"], "status": r["status"], "submitted": r["submitted_at"]}
             for r in expenses
         ]
         data["pending_expenses_total"] = sum(r["amount"] for r in expenses)
 
         # Pending leaves
         leaves = tconn.execute(
-            "SELECT lr.leave_type, lr.start_date, lr.end_date, lr.days, e.full_name "
+            "SELECT lr.leave_type, lr.start_date, lr.end_date, lr.days, lr.reason, e.full_name "
             "FROM leave_requests lr JOIN employees e ON lr.employee_id = e.employee_id "
             "WHERE lr.status = 'pending' ORDER BY lr.start_date"
         ).fetchall()
         data["pending_leaves"] = [
             {"employee": r["full_name"], "type": r["leave_type"], "start": r["start_date"],
-             "end": r["end_date"], "days": r["days"]}
+             "end": r["end_date"], "days": r["days"], "reason": r["reason"]}
             for r in leaves
         ]
 

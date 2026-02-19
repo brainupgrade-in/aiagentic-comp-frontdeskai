@@ -905,7 +905,7 @@ def get_conversation_stats(period: str = "all") -> str:
         # Category breakdown
         cats = conn.execute(
             f"SELECT category, COUNT(*) as cnt FROM messages "
-            f"{assistant_where} AND category != '' GROUP BY category ORDER BY cnt DESC"
+            f"{assistant_where} AND COALESCE(category, '') != '' GROUP BY category ORDER BY cnt DESC"
         ).fetchall()
         cat_lines = [f"  {c['category']}: {c['cnt']}" for c in cats]
 
@@ -972,7 +972,8 @@ def get_expense_summary() -> str:
 
         lines = ["Expense Claims Summary:", "\nBy status:"]
         for r in by_status:
-            lines.append(f"  {r['status']}: {r['cnt']} claims, INR {r['total']:,.2f}")
+            total = r['total'] or 0
+            lines.append(f"  {r['status']}: {r['cnt']} claims, INR {total:,.2f}")
         lines.append(f"\nPending claims ({len(pending)}):")
         for p in pending:
             lines.append(f"  {p['claim_id']}: {p['full_name']} — INR {p['amount']:,.2f} ({p['category']}) — {p['status']}")

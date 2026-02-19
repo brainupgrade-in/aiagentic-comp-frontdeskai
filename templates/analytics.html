@@ -18,8 +18,8 @@
             <span class="header-title">FrontDesk AI — Analytics</span>
         </div>
         <div class="header-right">
-            <a href="/chat" class="btn-logout" style="margin-right:8px;">Chat</a>
-            <a href="/kb" class="btn-logout" style="margin-right:8px;">Knowledge Base</a>
+            <a href="/chat" class="btn-logout">Chat</a>
+            <a href="/kb" class="btn-logout">Knowledge Base</a>
             <span class="user-badge">{{ user }}</span>
             <a href="/logout" class="btn-logout">Logout</a>
         </div>
@@ -32,10 +32,20 @@
     </main>
 
     <script>
+        const SAFE_CLASSES = ['hr','tech','finance','facilities','analytics','general'];
+
+        function safeClass(name) {
+            return SAFE_CLASSES.includes(name) ? name : 'general';
+        }
+
         async function loadDashboard() {
             try {
                 const res = await fetch('/analytics/data');
                 if (res.status === 401) { window.location.href = '/login'; return; }
+                if (res.status === 403) {
+                    document.getElementById('loadingState').textContent = 'Access denied. Admin privileges required.';
+                    return;
+                }
                 if (!res.ok) throw new Error('Failed to load');
                 const d = await res.json();
                 render(d);
@@ -47,7 +57,7 @@
         function render(d) {
             const c = document.getElementById('dashboard');
             const maxCat = d.categories.length ? Math.max(...d.categories.map(x => x.count)) : 1;
-            const maxRoom = d.room_utilization.length ? Math.max(...d.room_utilization.map(x => x.bookings)) : 1;
+            const maxRoom = d.room_utilization.length ? Math.max(...d.room_utilization.map(x => x.bookings), 1) : 1;
 
             c.innerHTML = `
                 <!-- Stat Cards -->
@@ -73,7 +83,7 @@
                             <div class="analytics-bar-row">
                                 <span class="analytics-bar-label">${esc(cat.name)}</span>
                                 <div class="analytics-bar-track">
-                                    <div class="analytics-bar-fill analytics-bar-${cat.name}" style="width:${Math.max(cat.count / maxCat * 100, 2)}%"></div>
+                                    <div class="analytics-bar-fill analytics-bar-${safeClass(cat.name)}" style="width:${maxCat ? Math.max(cat.count / maxCat * 100, 2) : 2}%"></div>
                                 </div>
                                 <span class="analytics-bar-value">${cat.count}</span>
                             </div>
@@ -111,7 +121,7 @@
                     </h3>
                     ${d.pending_expenses.length ? `
                     <table class="analytics-table">
-                        <thead><tr><th>Claim ID</th><th>Employee</th><th>Amount</th><th>Category</th><th>Status</th></tr></thead>
+                        <thead><tr><th>Claim ID</th><th>Employee</th><th>Amount</th><th>Category</th><th>Status</th><th>Submitted</th></tr></thead>
                         <tbody>
                             ${d.pending_expenses.map(e => `
                                 <tr>
@@ -119,7 +129,8 @@
                                     <td>${esc(e.employee)}</td>
                                     <td class="analytics-num">INR ${fmt(e.amount, true)}</td>
                                     <td>${esc(e.category)}</td>
-                                    <td><span class="meta-badge badge-${e.status === 'submitted' ? 'tech' : 'finance'}">${esc(e.status)}</span></td>
+                                    <td><span class="meta-badge badge-expense-${safeExpenseStatus(e.status)}">${esc(e.status)}</span></td>
+                                    <td>${esc(e.submitted || '')}</td>
                                 </tr>
                             `).join('')}
                         </tbody>
@@ -131,7 +142,7 @@
                     <h3 class="analytics-section-title">Pending Leave Requests</h3>
                     ${d.pending_leaves.length ? `
                     <table class="analytics-table">
-                        <thead><tr><th>Employee</th><th>Type</th><th>From</th><th>To</th><th>Days</th></tr></thead>
+                        <thead><tr><th>Employee</th><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Reason</th></tr></thead>
                         <tbody>
                             ${d.pending_leaves.map(l => `
                                 <tr>
@@ -140,6 +151,7 @@
                                     <td>${esc(l.start)}</td>
                                     <td>${esc(l.end)}</td>
                                     <td class="analytics-num">${l.days}</td>
+                                    <td>${esc(l.reason || '')}</td>
                                 </tr>
                             `).join('')}
                         </tbody>
@@ -150,7 +162,7 @@
                 <div class="analytics-section">
                     <h3 class="analytics-section-title">Room Utilization (Last 7 Days)</h3>
                     <div class="analytics-bars">
-                        ${d.room_utilization.map(r => `
+                        ${d.room_utilization.length ? d.room_utilization.map(r => `
                             <div class="analytics-bar-row">
                                 <span class="analytics-bar-label">${esc(r.room)}</span>
                                 <div class="analytics-bar-track">
@@ -158,7 +170,7 @@
                                 </div>
                                 <span class="analytics-bar-value">${r.bookings}</span>
                             </div>
-                        `).join('')}
+                        `).join('') : '<div class="analytics-empty">No bookings in the last 7 days</div>'}
                     </div>
                 </div>
             `;
@@ -169,6 +181,11 @@
                 <div class="analytics-card-value" style="color:${color}">${value}</div>
                 <div class="analytics-card-label">${label}</div>
             </div>`;
+        }
+
+        function safeExpenseStatus(status) {
+            const allowed = ['submitted', 'under_review'];
+            return allowed.includes(status) ? status : 'submitted';
         }
 
         function fmt(n, decimal) {
