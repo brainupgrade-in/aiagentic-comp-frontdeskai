@@ -76,6 +76,9 @@ spec:
               value: "http://tempo.monitoring.svc.cluster.local:4317"
             - name: LOG_LEVEL
               value: "INFO"
+            # Writable home for ONNX model cache (ChromaDB embeddings)
+            - name: HOME
+              value: "/shared"
           volumeMounts:
             - name: sqlite-data
               mountPath: /shared
