@@ -522,9 +522,18 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
             if active_tool_llm and active_tools:
                 for iteration in range(MAX_TOOL_ITERATIONS):
                     react_iterations += 1
-                    with trace_llm_call(f"{name}_react_iter_{iteration}") as ctx:
-                        response = active_tool_llm.invoke(messages)
-                        ctx["response"] = response
+                    try:
+                        with trace_llm_call(f"{name}_react_iter_{iteration}") as ctx:
+                            response = active_tool_llm.invoke(messages)
+                            ctx["response"] = response
+                    except Exception as tool_err:
+                        # LLM tool-calling error (e.g. malformed tool call, rate limit)
+                        # Fall through to final response without tools
+                        messages.append(SystemMessage(content=(
+                            f"Tool calling encountered an error: {tool_err}. "
+                            "Respond directly without using tools, based on what you already know."
+                        )))
+                        break
 
                     if not response.tool_calls:
                         # Agent decided it has enough info — move to final response
