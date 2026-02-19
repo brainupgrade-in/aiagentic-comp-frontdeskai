@@ -27,12 +27,13 @@ User Request → Supervisor (LLM classifier)
 - Per-user password storage (PBKDF2-HMAC-SHA256, 600k iterations)
 - Chat-based password change via the Account agent
 - Dynamic skill installation — admins can teach the system new capabilities via chat (web research → code generation → install → immediate availability)
+- Admin-configurable LLM model & provider (Groq/OpenRouter) via chat — persists across restarts
 - Admin analytics dashboard with visual UI and chat-based tools
 - Knowledge base management (upload/delete policy docs)
 - Prompt injection guardrails (delimiter-wrapped user input)
 - Rate limiting, security headers, input validation
 
-**Stack:** FastAPI + LangGraph + Groq (llama-3.3-70b) + SQLite + ChromaDB + OpenTelemetry
+**Stack:** FastAPI + LangGraph + Groq/OpenRouter (admin-configurable) + SQLite + ChromaDB + OpenTelemetry
 
 **Observability:** Prometheus metrics + structured JSON logs (Loki) + distributed tracing + Langfuse (optional)
 
@@ -122,7 +123,8 @@ kubectl logs deployment/frontdeskai
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `GROQ_API_KEY` | Groq API key for LLM access | (required) |
+| `GROQ_API_KEY` | Groq API key for LLM access | (required for Groq provider) |
+| `OPENROUTER_API_KEY` | OpenRouter API key (if using OpenRouter provider) | — |
 | `SECRET_KEY` | JWT signing secret | Auto-generated per session (required in production) |
 | `AUTH_PASSWORD` | Shared password for first-time login | `brainupgrade` |
 | `ADMIN_EMAILS` | Comma-separated admin emails | `admin@unigps.in` |
@@ -169,12 +171,28 @@ def get_weather(city: str) -> str:
 - *"Install a skill to check weather forecasts"* — researches, generates, and installs
 - *"List installed skills"* — shows all loaded skills with their tools and categories
 
+## LLM Configuration
+
+Admins can change the LLM model, provider, and API key at runtime via chat — no restart needed.
+
+**Supported providers:**
+- **Groq** (default): `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `mixtral-8x7b-32768`, etc.
+- **OpenRouter**: Access 100+ models via `provider/model` format (e.g. `google/gemini-2.0-flash-001`, `anthropic/claude-3.5-sonnet`)
+
+**Admin commands via chat:**
+- *"What model are we using?"* — shows current provider, model, temperature, API key status
+- *"Change model to llama-3.1-8b-instant"* — switches Groq model
+- *"Switch to OpenRouter with google/gemini-2.0-flash-001 and API key sk-or-..."* — switches provider + model + key
+- *"Update the API key to gsk_..."* — updates only the API key
+
+Settings persist in the `system_config` table and survive restarts.
+
 ## Databases
 
 | Database | Location | Purpose |
 |----------|----------|---------|
 | `history.db` | `$SQLITE_DIR/history.db` | Chat message history + `users` table (per-user password hashes) |
-| `frontdesk_tools.db` | `$SQLITE_DIR/frontdesk_tools.db` | Business data: employees, leave, tickets, expenses, rooms, payslips |
+| `frontdesk_tools.db` | `$SQLITE_DIR/frontdesk_tools.db` | Business data: employees, leave, tickets, expenses, rooms, payslips + system_config (LLM settings) |
 | `checkpoints.db` | `$SQLITE_DIR/checkpoints.db` | LangGraph checkpointer state |
 | `chroma/` | `$SQLITE_DIR/chroma/` | ChromaDB vector store for RAG |
 | `skills/` | `/shared/.frontdeskai/skills/` | Dynamic skill Python files (loaded at startup) |

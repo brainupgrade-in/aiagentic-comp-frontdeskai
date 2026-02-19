@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-FrontDesk AI is a multi-agent employee support desk built with FastAPI, LangGraph, and Groq (llama-3.3-70b). It routes employee chat requests through a supervisor agent to domain-specific workers (HR, Tech, Finance, Facilities, Analytics, Account, Skill Admin), with RAG-powered policy retrieval, tool-calling, QA checks, escalation handling, and dynamic skill installation.
+FrontDesk AI is a multi-agent employee support desk built with FastAPI, LangGraph, and Groq/OpenRouter LLMs. It routes employee chat requests through a supervisor agent to domain-specific workers (HR, Tech, Finance, Facilities, Analytics, Account, Skill Admin), with RAG-powered policy retrieval, tool-calling, QA checks, escalation handling, dynamic skill installation, and admin-configurable LLM model/provider.
 
 ## Quick Start
 
@@ -31,7 +31,7 @@ app.py (FastAPI)
 | File | Purpose |
 |------|---------|
 | `app.py` | FastAPI routes: login, chat, KB management, analytics API, admin gates |
-| `agents.py` | LangGraph StateGraph: supervisor, 8 domain workers, QA, manager, fallback |
+| `agents.py` | LangGraph StateGraph: supervisor, 8 domain workers, QA, manager, fallback. Dynamic LLM factory (`get_llm()`) supports Groq and OpenRouter providers |
 | `auth.py` | Password hashing (PBKDF2-SHA256, 600k iter), `users` table, `current_user_email` ContextVar |
 | `tools.py` | LangChain `@tool` functions for each domain + schema/seed data |
 | `skills.py` | Dynamic skill registry: load/install/list skills, web research tools, runtime tool injection |
@@ -45,13 +45,13 @@ app.py (FastAPI)
 - **hr/tech/finance/facilities**: Route through RAG retrieval, then domain worker with tools
 - **analytics**: Bypasses RAG, goes directly to analytics worker with analytics tools
 - **account**: Bypasses RAG, goes directly to account worker with `change_my_password` tool
-- **skill_admin**: Bypasses RAG, admin-only (non-admins routed to general). Tools: `search_web`, `fetch_webpage`, `install_skill`, `list_skills`. Workers also get dynamically-injected skill tools matching their category.
+- **skill_admin**: Bypasses RAG, admin-only (non-admins routed to general). Tools: `search_web`, `fetch_webpage`, `install_skill`, `list_skills`, `get_llm_config`, `change_llm_model`. Workers also get dynamically-injected skill tools matching their category. Admins can change the LLM model, provider (groq/openrouter), and API key at runtime via chat.
 - **general**: Static response, no tools
 
 ## Databases & Storage (all in `$SQLITE_DIR`, default `/shared/.sqlite`)
 
 - `history.db` — chat messages + `users` table (per-user password hashes)
-- `frontdesk_tools.db` — employees, leave, tickets, expenses, rooms, payslips
+- `frontdesk_tools.db` — employees, leave, tickets, expenses, rooms, payslips, system_config (LLM settings)
 - `checkpoints.db` — LangGraph checkpointer
 - `/shared/.frontdeskai/skills/` — dynamic skill Python files (loaded at startup + on install)
 
@@ -89,11 +89,14 @@ kubectl rollout restart deployment/frontdeskai
 
 | Variable | Required | Default |
 |----------|----------|---------|
-| `GROQ_API_KEY` | Yes | — |
+| `GROQ_API_KEY` | Yes (for Groq) | — |
+| `OPENROUTER_API_KEY` | No (for OpenRouter) | — |
 | `SECRET_KEY` | Production | Auto-generated in dev |
 | `AUTH_PASSWORD` | No | `brainupgrade` |
 | `ADMIN_EMAILS` | No | `admin@unigps.in` |
 | `SQLITE_DIR` | No | `/shared/.sqlite` |
+
+Note: Admins can override the LLM model, provider, and API key at runtime via chat (stored in `system_config` table, persists across restarts).
 
 ## Conventions
 

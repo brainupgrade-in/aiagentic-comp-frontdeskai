@@ -1,6 +1,8 @@
 """Multi-agent support system with structured output, conversation memory, RAG, tool calling, and guardrails."""
 
+import os
 import re
+import sqlite3
 from typing import TypedDict, Annotated, Literal, Optional
 from operator import add
 from datetime import datetime
@@ -9,6 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import SystemMessage, AIMessage, ToolMessage
 from langgraph.graph import StateGraph, START, END
@@ -20,7 +23,77 @@ from fewshot import retrieve_examples, format_fewshot_context
 from tools import DOMAIN_TOOLS
 from skills import get_skill_tools
 
-llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
+
+# --- Dynamic LLM Configuration ---
+
+_llm_config = {
+    "provider": "groq",
+    "model": "llama-3.3-70b-versatile",
+    "temperature": 0.0,
+    "api_key": "",  # empty = use env var
+}
+_llm_cache: dict = {}  # keyed by config fingerprint
+
+
+def _config_db_path() -> str:
+    return os.path.join(os.getenv("SQLITE_DIR", "/shared/.sqlite"), "frontdesk_tools.db")
+
+
+def load_llm_config():
+    """Read LLM settings from system_config table (if it exists)."""
+    db_path = _config_db_path()
+    if not os.path.isfile(db_path):
+        return
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT key, value FROM system_config WHERE key IN ('llm_provider','llm_model','llm_temperature','llm_api_key')"
+        ).fetchall()
+        conn.close()
+        for row in rows:
+            k, v = row["key"], row["value"]
+            if k == "llm_provider" and v:
+                _llm_config["provider"] = v
+            elif k == "llm_model" and v:
+                _llm_config["model"] = v
+            elif k == "llm_temperature" and v:
+                _llm_config["temperature"] = float(v)
+            elif k == "llm_api_key":
+                _llm_config["api_key"] = v
+    except Exception:
+        pass  # Table may not exist yet on first run
+
+
+def reload_llm_config():
+    """Called by change_llm_model tool after DB update. Reloads config + clears cache."""
+    load_llm_config()
+    _llm_cache.clear()
+
+
+def get_llm():
+    """Return a cached LLM instance for the current config."""
+    cfg = _llm_config
+    cache_key = f"{cfg['provider']}:{cfg['model']}:{cfg['temperature']}:{hash(cfg['api_key'])}"
+    if cache_key not in _llm_cache:
+        if cfg["provider"] == "openrouter":
+            api_key = cfg["api_key"] or os.getenv("OPENROUTER_API_KEY", "")
+            _llm_cache[cache_key] = ChatOpenAI(
+                model=cfg["model"],
+                temperature=cfg["temperature"],
+                openai_api_key=api_key,
+                openai_api_base="https://openrouter.ai/api/v1",
+            )
+        else:
+            kwargs = {"model": cfg["model"], "temperature": cfg["temperature"]}
+            if cfg["api_key"]:
+                kwargs["api_key"] = cfg["api_key"]
+            _llm_cache[cache_key] = ChatGroq(**kwargs)
+    return _llm_cache[cache_key]
+
+
+# Load persisted config on import
+load_llm_config()
 
 MAX_TOOL_ITERATIONS = 3   # max tool-calling rounds per worker
 MAX_QA_RETRIES = 1        # max times QA can send worker back for self-correction
@@ -127,6 +200,10 @@ SUPERVISOR_PROMPT = ChatPromptTemplate.from_messages([
         "- 'Install a weather lookup skill' → skill_admin, confidence 9\n"
         "- 'List installed skills' → skill_admin, confidence 9\n"
         "- 'Add a new capability to check stock prices' → skill_admin, confidence 9\n"
+        "- 'Change the LLM model to llama-3.1-8b-instant' → skill_admin, confidence 9\n"
+        "- 'What model are we using?' → skill_admin, confidence 8\n"
+        "- 'Switch to OpenRouter with google/gemini-2.0-flash-001' → skill_admin, confidence 9\n"
+        "- 'Update the API key' → skill_admin, confidence 9\n"
         "- 'Hello, how are you?' → general, confidence 7\n"
         "- 'something something' → general, confidence 3\n\n"
         "Use the conversation history (if any) to understand context. "
@@ -142,9 +219,6 @@ SUPERVISOR_PROMPT = ChatPromptTemplate.from_messages([
      "Classify the request above into the correct department."),
 ])
 
-supervisor_llm = llm.with_structured_output(Classification)
-
-
 def supervisor(state: SupportRequest) -> dict:
     ts = datetime.now().strftime("%H:%M:%S")
     try:
@@ -154,7 +228,7 @@ def supervisor(state: SupportRequest) -> dict:
             request=state["request"],
         )
         with trace_llm_call("supervisor") as ctx:
-            result = supervisor_llm.invoke(prompt)
+            result = get_llm().with_structured_output(Classification).invoke(prompt)
             ctx["response"] = result
         return {
             "category": result.category,
@@ -282,7 +356,8 @@ WORKER_CONFIGS = {
     },
     "skill_admin": {
         "system_prompt": (
-            "You are the FrontDesk AI Skill Installer. You help admins add new capabilities.\n\n"
+            "You are the FrontDesk AI Skill Installer and System Configurator. You help admins add new capabilities and manage LLM settings.\n\n"
+            "SKILL INSTALLATION:\n"
             "When asked to install a skill, follow this process:\n"
             "1. RESEARCH: Use search_web to find relevant APIs, libraries, or approaches\n"
             "2. LEARN: Use fetch_webpage to read API documentation or examples\n"
@@ -295,14 +370,18 @@ WORKER_CONFIGS = {
             "Categories for skills: hr, tech, finance, facilities, analytics, account\n"
             "A skill can target multiple categories.\n\n"
             "When asked to list skills, use list_skills.\n"
-            "Always explain what you found and what the skill does after installing."
+            "Always explain what you found and what the skill does after installing.\n\n"
+            "LLM CONFIGURATION:\n"
+            "- Use get_llm_config to show the current model, provider, and temperature.\n"
+            "- Use change_llm_model to switch models or providers. Supported providers: 'groq' and 'openrouter'.\n"
+            "  - Groq models: llama-3.3-70b-versatile, llama-3.1-8b-instant, mixtral-8x7b-32768, etc.\n"
+            "  - OpenRouter models: use 'provider/model' format (e.g. 'google/gemini-2.0-flash-001', 'anthropic/claude-3.5-sonnet').\n"
+            "- If the user provides an API key, pass it to change_llm_model. Never log or repeat API keys in your response.\n"
+            "- Changes take effect immediately for all users."
         ),
         "can_escalate": False,
     },
 }
-
-worker_llm = llm.with_structured_output(WorkerResponse)
-
 
 def _execute_tool_calls(ai_message: AIMessage, tools_by_name: dict) -> list[ToolMessage]:
     """Execute tool calls from an AI message and return ToolMessage results."""
@@ -367,9 +446,6 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
          "[USER_REQUEST_START]\n{request}\n[USER_REQUEST_END]"),
     ])
 
-    # LLM with tools bound (for ReAct tool-calling phase)
-    tool_llm = llm.bind_tools(domain_tools) if domain_tools else None
-
     def worker(state: SupportRequest) -> dict:
         ts = datetime.now().strftime("%H:%M:%S")
         try:
@@ -390,11 +466,11 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
                 )))
 
             # Dynamic skill tool injection: check for loaded skill tools targeting this category
+            current_llm = get_llm()
             skill_tools = get_skill_tools(name)
             if skill_tools:
                 active_tools = domain_tools + skill_tools
                 active_tools_by_name = {t.name: t for t in active_tools}
-                active_tool_llm = llm.bind_tools(active_tools)
                 skill_tool_names = ", ".join(t.name for t in skill_tools)
                 messages.append(SystemMessage(content=(
                     f"Additional skill tools are available: {skill_tool_names}. "
@@ -403,7 +479,8 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
             else:
                 active_tools = domain_tools
                 active_tools_by_name = tools_by_name
-                active_tool_llm = tool_llm
+
+            active_tool_llm = current_llm.bind_tools(active_tools) if active_tools else None
 
             tool_calls_log = []
             react_iterations = 0
@@ -438,7 +515,7 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
 
             # === Final structured response (with full tool context in messages) ===
             with trace_llm_call(f"{name}_worker_final") as ctx:
-                result = worker_llm.invoke(messages)
+                result = get_llm().with_structured_output(WorkerResponse).invoke(messages)
                 ctx["response"] = result
 
             escalate = can_escalate and result.needs_escalation
@@ -565,7 +642,7 @@ def manager_agent(state: SupportRequest) -> dict:
             worker_output=state["worker_output"][:200],
         )
         with trace_llm_call("manager") as ctx:
-            response = llm.invoke(messages)
+            response = get_llm().invoke(messages)
             ctx["response"] = response
         return {
             "worker_output": f"[Manager Review] {response.content.strip()}",

@@ -356,6 +356,29 @@ def _init_schema(conn: sqlite3.Connection):
         payslip_data,
     )
 
+    # =============================================
+    # SYSTEM CONFIG: runtime settings (LLM model, etc.)
+    # =============================================
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS system_config (
+            key        TEXT PRIMARY KEY,
+            value      TEXT NOT NULL,
+            updated_by TEXT,
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+    """)
+    # Seed defaults (idempotent)
+    config_defaults = [
+        ("llm_provider",    "groq"),
+        ("llm_model",       "llama-3.3-70b-versatile"),
+        ("llm_temperature", "0"),
+        ("llm_api_key",     ""),
+    ]
+    conn.executemany(
+        "INSERT OR IGNORE INTO system_config (key, value) VALUES (?, ?)",
+        config_defaults,
+    )
+
     conn.commit()
 
 
@@ -1067,6 +1090,127 @@ def change_my_password(current_password: str, new_password: str) -> str:
 ACCOUNT_TOOLS = [change_my_password]
 
 
+# ========== LLM CONFIG TOOLS (skill_admin) ==========
+
+GROQ_MODELS = {
+    "llama-3.3-70b-versatile",
+    "llama-3.1-70b-versatile",
+    "llama-3.1-8b-instant",
+    "llama3-70b-8192",
+    "llama3-8b-8192",
+    "mixtral-8x7b-32768",
+    "gemma2-9b-it",
+}
+
+# OpenRouter supports hundreds of models; validate format only (provider/model)
+def _is_valid_openrouter_model(name: str) -> bool:
+    return "/" in name and len(name) > 3
+
+
+def _get_system_config(key: str) -> str:
+    """Read a single value from system_config table."""
+    conn = _get_db()
+    try:
+        row = conn.execute("SELECT value FROM system_config WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else ""
+    finally:
+        conn.close()
+
+
+def _set_system_config(key: str, value: str, updated_by: str = "") -> None:
+    """Write a single value to system_config table."""
+    conn = _get_db()
+    try:
+        conn.execute(
+            "INSERT INTO system_config (key, value, updated_by, updated_at) "
+            "VALUES (?, ?, ?, datetime('now')) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_by=excluded.updated_by, updated_at=datetime('now')",
+            (key, value, updated_by),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _mask_api_key(key: str) -> str:
+    """Show first 4 + last 3 chars of an API key."""
+    if not key or len(key) < 10:
+        return "***" if key else ""
+    return f"{key[:4]}...{key[-3:]}"
+
+
+@tool
+def get_llm_config() -> str:
+    """Get the current LLM configuration (model, provider, temperature, API key status)."""
+    provider = _get_system_config("llm_provider") or "groq"
+    model = _get_system_config("llm_model") or "llama-3.3-70b-versatile"
+    temp = _get_system_config("llm_temperature") or "0"
+    api_key = _get_system_config("llm_api_key") or ""
+
+    key_status = f"custom key configured ({_mask_api_key(api_key)})" if api_key else "using environment variable"
+
+    return (
+        f"Current LLM Configuration:\n"
+        f"  Provider:    {provider}\n"
+        f"  Model:       {model}\n"
+        f"  Temperature: {temp}\n"
+        f"  API Key:     {key_status}"
+    )
+
+
+@tool
+def change_llm_model(model_name: str, provider: str = "groq", temperature: float = 0.0, api_key: str = "") -> str:
+    """Change the LLM model used by all agents. provider: 'groq' or 'openrouter'.
+    model_name: e.g. 'llama-3.1-8b-instant' (groq) or 'google/gemini-2.0-flash-001' (openrouter).
+    api_key: optional — omit to keep using the environment variable (GROQ_API_KEY).
+    For openrouter, an API key is required (set via this tool or OPENROUTER_API_KEY env var)."""
+    from auth import current_user_email
+    try:
+        email = current_user_email.get()
+    except LookupError:
+        email = "unknown"
+
+    provider = provider.lower().strip()
+    if provider not in ("groq", "openrouter"):
+        return f"Invalid provider '{provider}'. Must be 'groq' or 'openrouter'."
+
+    if provider == "groq" and model_name not in GROQ_MODELS:
+        valid = ", ".join(sorted(GROQ_MODELS))
+        return f"Invalid Groq model '{model_name}'. Valid models: {valid}"
+
+    if provider == "openrouter" and not _is_valid_openrouter_model(model_name):
+        return (
+            f"Invalid OpenRouter model '{model_name}'. "
+            "OpenRouter models use the format 'provider/model' (e.g. 'google/gemini-2.0-flash-001', 'anthropic/claude-3.5-sonnet')."
+        )
+
+    # For openrouter, an API key is required (either passed or from env)
+    if provider == "openrouter" and not api_key and not os.getenv("OPENROUTER_API_KEY"):
+        return "OpenRouter requires an API key. Pass one via api_key parameter or set OPENROUTER_API_KEY env var."
+
+    _set_system_config("llm_provider", provider, email)
+    _set_system_config("llm_model", model_name, email)
+    _set_system_config("llm_temperature", str(temperature), email)
+    if api_key:
+        _set_system_config("llm_api_key", api_key, email)
+
+    # Reload the LLM config in agents module
+    from agents import reload_llm_config
+    reload_llm_config()
+
+    return (
+        f"LLM configuration updated successfully!\n"
+        f"  Provider:    {provider}\n"
+        f"  Model:       {model_name}\n"
+        f"  Temperature: {temperature}\n"
+        f"  API Key:     {'custom key set' if api_key else 'unchanged (using env var)'}\n"
+        f"Changes take effect immediately for all subsequent requests."
+    )
+
+
+LLM_CONFIG_TOOLS = [get_llm_config, change_llm_model]
+
+
 # ========== TOOL REGISTRY ==========
 
 HR_TOOLS = [get_leave_balance, apply_leave]
@@ -1075,6 +1219,9 @@ FINANCE_TOOLS = [get_expense_status, submit_expense_claim, get_payslip]
 FACILITIES_TOOLS = [check_room_availability, book_meeting_room]
 
 from skills import SKILL_ADMIN_TOOLS
+
+# Append LLM config tools to skill_admin tools
+SKILL_ADMIN_TOOLS = SKILL_ADMIN_TOOLS + LLM_CONFIG_TOOLS
 
 DOMAIN_TOOLS = {
     "hr": HR_TOOLS,
