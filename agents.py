@@ -204,6 +204,10 @@ SUPERVISOR_PROMPT = ChatPromptTemplate.from_messages([
         "- 'What model are we using?' → skill_admin, confidence 8\n"
         "- 'Switch to OpenRouter with google/gemini-2.0-flash-001' → skill_admin, confidence 9\n"
         "- 'Update the API key' → skill_admin, confidence 9\n"
+        "- 'Configure SMTP with AWS SES' → skill_admin, confidence 9\n"
+        "- 'Send an email to rajesh about his leave approval' → skill_admin, confidence 9\n"
+        "- 'Show SMTP configuration' → skill_admin, confidence 8\n"
+        "- 'Set up email notifications' → skill_admin, confidence 9\n"
         "- 'Hello, how are you?' → general, confidence 7\n"
         "- 'something something' → general, confidence 3\n\n"
         "Use the conversation history (if any) to understand context. "
@@ -377,7 +381,16 @@ WORKER_CONFIGS = {
             "  - Groq models: llama-3.3-70b-versatile, llama-3.1-8b-instant, mixtral-8x7b-32768, etc.\n"
             "  - OpenRouter models: use 'provider/model' format (e.g. 'google/gemini-2.0-flash-001', 'anthropic/claude-3.5-sonnet').\n"
             "- If the user provides an API key, pass it to change_llm_model. Never log or repeat API keys in your response.\n"
-            "- Changes take effect immediately for all users."
+            "- Changes take effect immediately for all users.\n\n"
+            "EMAIL / SMTP CONFIGURATION:\n"
+            "- Use get_smtp_config to show the current SMTP settings.\n"
+            "- Use configure_smtp to set up email sending (e.g. AWS SES, Gmail SMTP).\n"
+            "  - AWS SES example: host=email-smtp.us-east-1.amazonaws.com, port=587, username=AKIA..., password=..., from_email=noreply@domain.com\n"
+            "  - Gmail example: host=smtp.gmail.com, port=587, username=user@gmail.com, password=app-password, from_email=user@gmail.com\n"
+            "- Use send_email to send an email to a recipient with a subject and body.\n"
+            "- NEVER expose the SMTP password in your response — it is stored encrypted.\n"
+            "- If the user asks to 'set up email' or 'configure email', use configure_smtp.\n"
+            "- If the user asks to 'send an email', use send_email."
         ),
         "can_escalate": False,
     },

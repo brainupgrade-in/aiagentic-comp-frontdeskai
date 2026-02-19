@@ -28,6 +28,7 @@ User Request → Supervisor (LLM classifier)
 - Chat-based password change via the Account agent
 - Dynamic skill installation — admins can teach the system new capabilities via chat (web research → code generation → install → immediate availability)
 - Admin-configurable LLM model & provider (Groq/OpenRouter) via chat — persists across restarts
+- Admin-configurable SMTP email — configure and send emails via chat (encrypted password storage)
 - Admin analytics dashboard with visual UI and chat-based tools
 - Knowledge base management (upload/delete policy docs)
 - Prompt injection guardrails (delimiter-wrapped user input)
@@ -101,7 +102,7 @@ kubectl logs deployment/frontdeskai
 ├── app.py              # FastAPI application with auth, chat, KB management, analytics API
 ├── agents.py           # LangGraph multi-agent graph (supervisor, workers, QA, escalation)
 ├── auth.py             # Per-user password hashing (PBKDF2) and storage
-├── tools.py            # Domain tool definitions (HR, Tech, Finance, Facilities, Analytics, Account)
+├── tools.py            # Domain tool definitions (HR, Tech, Finance, Facilities, Analytics, Account, SMTP)
 ├── skills.py           # Dynamic skill registry — load, install, list skills + web research tools
 ├── rag.py              # RAG pipeline — ChromaDB indexing and retrieval (ONNX embeddings, no torch)
 ├── observability.py    # OpenTelemetry metrics, tracing, and JSON logging
@@ -187,6 +188,21 @@ Admins can change the LLM model, provider, and API key at runtime via chat — n
 
 Settings persist in the `system_config` table and survive restarts.
 
+## Email / SMTP Configuration
+
+Admins can configure SMTP email settings and send emails via chat — no restart needed. SMTP passwords are encrypted with Fernet (AES-128-CBC + HMAC-SHA256) derived from `SECRET_KEY`.
+
+**Admin commands via chat:**
+- *"Show email settings"* — shows current SMTP configuration (password masked)
+- *"Configure SMTP with host=email-smtp.us-east-1.amazonaws.com port=587 username=AKIA... password=... from=noreply@domain.com"* — sets up SMTP
+- *"Send an email to rajesh@unigps.in about his leave approval"* — sends an email using configured SMTP
+
+**Security notes:**
+- SMTP password is encrypted at rest using Fernet symmetric encryption
+- Encryption key is derived from `SECRET_KEY` env var via PBKDF2 — if `SECRET_KEY` is rotated, admin must re-run `configure_smtp`
+- Password is never shown in tool output (masked or `"*** (encrypted)"`)
+- Only admins can configure SMTP or send emails (gated by `skill_admin` routing)
+
 ## Databases
 
 | Database | Location | Purpose |
@@ -250,6 +266,7 @@ rate(frontdeskai_agent_errors_total[5m])
 - Prompt injection guardrails: delimiter-wrapped user input, PII detection/redaction
 - Admin access gated by `ADMIN_EMAILS` env var
 - ContextVar-based identity for tool calls (server-set, LLM cannot influence)
+- SMTP password encrypted at rest with Fernet (AES-128-CBC + HMAC-SHA256, key derived from SECRET_KEY)
 
 ## Access
 

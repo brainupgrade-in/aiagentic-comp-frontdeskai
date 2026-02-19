@@ -45,13 +45,13 @@ app.py (FastAPI)
 - **hr/tech/finance/facilities**: Route through RAG retrieval, then domain worker with tools
 - **analytics**: Bypasses RAG, goes directly to analytics worker with analytics tools
 - **account**: Bypasses RAG, goes directly to account worker with `change_my_password` tool
-- **skill_admin**: Bypasses RAG, admin-only (non-admins routed to general). Tools: `search_web`, `fetch_webpage`, `install_skill`, `list_skills`, `get_llm_config`, `change_llm_model`. Workers also get dynamically-injected skill tools matching their category. Admins can change the LLM model, provider (groq/openrouter), and API key at runtime via chat.
+- **skill_admin**: Bypasses RAG, admin-only (non-admins routed to general). Tools: `search_web`, `fetch_webpage`, `install_skill`, `list_skills`, `get_llm_config`, `change_llm_model`, `configure_smtp`, `get_smtp_config`, `send_email`. Workers also get dynamically-injected skill tools matching their category. Admins can change the LLM model, provider (groq/openrouter), API key, and SMTP email settings at runtime via chat.
 - **general**: Static response, no tools
 
 ## Databases & Storage (all in `$SQLITE_DIR`, default `/shared/.sqlite`)
 
 - `history.db` — chat messages + `users` table (per-user password hashes)
-- `frontdesk_tools.db` — employees, leave, tickets, expenses, rooms, payslips, system_config (LLM settings)
+- `frontdesk_tools.db` — employees, leave, tickets, expenses, rooms, payslips, system_config (LLM + SMTP settings)
 - `checkpoints.db` — LangGraph checkpointer
 - `/shared/.frontdeskai/skills/` — dynamic skill Python files (loaded at startup + on install)
 
@@ -91,12 +91,12 @@ kubectl rollout restart deployment/frontdeskai
 |----------|----------|---------|
 | `GROQ_API_KEY` | Yes (for Groq) | — |
 | `OPENROUTER_API_KEY` | No (for OpenRouter) | — |
-| `SECRET_KEY` | Production | Auto-generated in dev |
+| `SECRET_KEY` | Production | Auto-generated in dev (also used to derive SMTP password encryption key — if rotated, admin must re-run `configure_smtp`) |
 | `AUTH_PASSWORD` | No | `brainupgrade` |
 | `ADMIN_EMAILS` | No | `admin@unigps.in` |
 | `SQLITE_DIR` | No | `/shared/.sqlite` |
 
-Note: Admins can override the LLM model, provider, and API key at runtime via chat (stored in `system_config` table, persists across restarts).
+Note: Admins can override the LLM model, provider, API key, and SMTP email settings at runtime via chat (stored in `system_config` table, persists across restarts). SMTP password is encrypted with Fernet (derived from `SECRET_KEY`).
 
 ## Conventions
 

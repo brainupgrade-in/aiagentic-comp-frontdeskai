@@ -7,7 +7,12 @@ schema, constraints, indexes, and foreign keys.
 
 import os
 import sqlite3
+import smtplib
+import hashlib
+import base64
 from datetime import datetime
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 from langchain_core.tools import tool
 
@@ -373,6 +378,12 @@ def _init_schema(conn: sqlite3.Connection):
         ("llm_model",       "llama-3.3-70b-versatile"),
         ("llm_temperature", "0"),
         ("llm_api_key",     ""),
+        ("smtp_host",       ""),
+        ("smtp_port",       "587"),
+        ("smtp_username",   ""),
+        ("smtp_password_enc", ""),
+        ("smtp_from_email", ""),
+        ("smtp_use_tls",    "true"),
     ]
     conn.executemany(
         "INSERT OR IGNORE INTO system_config (key, value) VALUES (?, ?)",
@@ -1139,6 +1150,29 @@ def _mask_api_key(key: str) -> str:
     return f"{key[:4]}...{key[-3:]}"
 
 
+def _get_fernet():
+    """Derive a deterministic Fernet key from SECRET_KEY via PBKDF2."""
+    from cryptography.fernet import Fernet
+    secret = os.getenv("SECRET_KEY", "frontdeskai-dev-secret")
+    dk = hashlib.pbkdf2_hmac(
+        "sha256",
+        secret.encode(),
+        b"frontdeskai-smtp-v1",
+        100_000,
+    )
+    return Fernet(base64.urlsafe_b64encode(dk[:32]))
+
+
+def _encrypt_smtp_password(plaintext: str) -> str:
+    """Encrypt an SMTP password with Fernet."""
+    return _get_fernet().encrypt(plaintext.encode()).decode()
+
+
+def _decrypt_smtp_password(ciphertext: str) -> str:
+    """Decrypt an SMTP password with Fernet."""
+    return _get_fernet().decrypt(ciphertext.encode()).decode()
+
+
 @tool
 def get_llm_config() -> str:
     """Get the current LLM configuration (model, provider, temperature, API key status)."""
@@ -1211,6 +1245,175 @@ def change_llm_model(model_name: str, provider: str = "groq", temperature: float
 LLM_CONFIG_TOOLS = [get_llm_config, change_llm_model]
 
 
+# ========== SMTP / EMAIL TOOLS (skill_admin) ==========
+
+@tool
+def configure_smtp(host: str, port: int, username: str, password: str, from_email: str, use_tls: bool = True) -> str:
+    """Configure SMTP email settings (e.g. AWS SES, Gmail). Admin only.
+    host: SMTP server hostname. port: SMTP port (587 for STARTTLS, 465 for SSL).
+    username: SMTP auth username. password: SMTP auth password (will be encrypted).
+    from_email: Sender email address. use_tls: Whether to use TLS (default true)."""
+    from auth import current_user_email
+
+    try:
+        email = current_user_email.get()
+    except LookupError:
+        email = "unknown"
+
+    # Validate inputs
+    if not host or not host.strip():
+        return "SMTP host is required."
+    if port not in (25, 465, 587, 2525):
+        return f"Invalid SMTP port {port}. Common ports: 587 (STARTTLS), 465 (SSL), 25, 2525."
+    if not username or not username.strip():
+        return "SMTP username is required."
+    if not password or not password.strip():
+        return "SMTP password is required."
+    if not from_email or "@" not in from_email:
+        return "A valid from_email address is required (must contain @)."
+
+    # Encrypt password
+    encrypted_password = _encrypt_smtp_password(password)
+
+    # Store all SMTP config
+    _set_system_config("smtp_host", host.strip(), email)
+    _set_system_config("smtp_port", str(port), email)
+    _set_system_config("smtp_username", username.strip(), email)
+    _set_system_config("smtp_password_enc", encrypted_password, email)
+    _set_system_config("smtp_from_email", from_email.strip(), email)
+    _set_system_config("smtp_use_tls", "true" if use_tls else "false", email)
+
+    return (
+        f"SMTP configured successfully!\n"
+        f"  Host:       {host.strip()}\n"
+        f"  Port:       {port}\n"
+        f"  Username:   {_mask_api_key(username.strip())}\n"
+        f"  Password:   *** (encrypted)\n"
+        f"  From Email: {from_email.strip()}\n"
+        f"  TLS:        {'enabled' if use_tls else 'disabled'}\n"
+        f"  Updated by: {email}"
+    )
+
+
+@tool
+def get_smtp_config() -> str:
+    """Show the current SMTP email configuration (password is masked)."""
+    host = _get_system_config("smtp_host")
+    port = _get_system_config("smtp_port") or "587"
+    username = _get_system_config("smtp_username")
+    password_enc = _get_system_config("smtp_password_enc")
+    from_email = _get_system_config("smtp_from_email")
+    use_tls = _get_system_config("smtp_use_tls") or "true"
+
+    if not host:
+        return (
+            "SMTP is not configured.\n"
+            "Ask an admin to configure it with: configure SMTP host, port, username, password, and from_email.\n"
+            "Example: 'Configure SMTP with host=email-smtp.us-east-1.amazonaws.com port=587 "
+            "username=AKIA... password=... from=noreply@example.com'"
+        )
+
+    return (
+        f"Current SMTP Configuration:\n"
+        f"  Host:       {host}\n"
+        f"  Port:       {port}\n"
+        f"  Username:   {_mask_api_key(username)}\n"
+        f"  Password:   {'*** (encrypted)' if password_enc else 'not set'}\n"
+        f"  From Email: {from_email}\n"
+        f"  TLS:        {'enabled' if use_tls == 'true' else 'disabled'}"
+    )
+
+
+@tool
+def send_email(to: str, subject: str, body: str) -> str:
+    """Send an email using the configured SMTP settings. Admin only.
+    to: Recipient email address. subject: Email subject line. body: Email body text."""
+    from auth import current_user_email
+
+    try:
+        sender_identity = current_user_email.get()
+    except LookupError:
+        sender_identity = "unknown"
+
+    # Validate recipient
+    if not to or "@" not in to:
+        return "Invalid recipient email address (must contain @)."
+
+    # Validate subject/body length
+    if not subject or len(subject.strip()) == 0:
+        return "Email subject is required."
+    if len(subject) > 500:
+        return "Email subject too long (max 500 characters)."
+    if not body or len(body.strip()) == 0:
+        return "Email body is required."
+    if len(body) > 50000:
+        return "Email body too long (max 50,000 characters)."
+
+    # Load SMTP config
+    host = _get_system_config("smtp_host")
+    if not host:
+        return "SMTP is not configured. Please configure SMTP settings first."
+
+    port = int(_get_system_config("smtp_port") or "587")
+    username = _get_system_config("smtp_username")
+    password_enc = _get_system_config("smtp_password_enc")
+    from_email = _get_system_config("smtp_from_email")
+    use_tls = (_get_system_config("smtp_use_tls") or "true") == "true"
+
+    if not password_enc:
+        return "SMTP password is not configured. Please run configure_smtp first."
+
+    # Decrypt password
+    try:
+        password = _decrypt_smtp_password(password_enc)
+    except Exception:
+        return (
+            "Failed to decrypt SMTP password. This can happen if SECRET_KEY was rotated. "
+            "Please re-run configure_smtp to set a new password."
+        )
+
+    # Build email message
+    msg = MIMEMultipart()
+    msg["From"] = from_email
+    msg["To"] = to.strip()
+    msg["Subject"] = subject.strip()
+    msg.attach(MIMEText(body, "plain"))
+
+    # Send email
+    try:
+        if port == 465 and not use_tls:
+            # Direct SSL connection
+            with smtplib.SMTP_SSL(host, port, timeout=30) as server:
+                server.login(username, password)
+                server.send_message(msg)
+        else:
+            # STARTTLS (port 587 default)
+            with smtplib.SMTP(host, port, timeout=30) as server:
+                if use_tls:
+                    server.starttls()
+                server.login(username, password)
+                server.send_message(msg)
+
+        return (
+            f"Email sent successfully!\n"
+            f"  To:      {to.strip()}\n"
+            f"  From:    {from_email}\n"
+            f"  Subject: {subject.strip()}\n"
+            f"  Sent by: {sender_identity}"
+        )
+    except smtplib.SMTPAuthenticationError:
+        return "SMTP authentication failed. Please check the SMTP username and password."
+    except smtplib.SMTPRecipientsRefused:
+        return f"Recipient '{to}' was refused by the SMTP server. Please check the email address."
+    except smtplib.SMTPException as e:
+        return f"SMTP error: {e}"
+    except OSError as e:
+        return f"Network error connecting to SMTP server: {e}"
+
+
+SMTP_TOOLS = [configure_smtp, get_smtp_config, send_email]
+
+
 # ========== TOOL REGISTRY ==========
 
 HR_TOOLS = [get_leave_balance, apply_leave]
@@ -1220,8 +1423,8 @@ FACILITIES_TOOLS = [check_room_availability, book_meeting_room]
 
 from skills import SKILL_ADMIN_TOOLS
 
-# Append LLM config tools to skill_admin tools
-SKILL_ADMIN_TOOLS = SKILL_ADMIN_TOOLS + LLM_CONFIG_TOOLS
+# Append LLM config and SMTP tools to skill_admin tools
+SKILL_ADMIN_TOOLS = SKILL_ADMIN_TOOLS + LLM_CONFIG_TOOLS + SMTP_TOOLS
 
 DOMAIN_TOOLS = {
     "hr": HR_TOOLS,
