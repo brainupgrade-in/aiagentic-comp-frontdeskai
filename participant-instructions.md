@@ -33,7 +33,7 @@ Once deployed, open in your browser:
 https://YOURNAMESPACE-app.brainupgrade.in
 ```
 
-**Login:** Any email address + password `brainupgrade`
+**Login:** Any email address + password `brainupgrade` (first login saves a hashed password per user; you can change it later via chat)
 
 ## Verify
 

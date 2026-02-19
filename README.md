@@ -7,23 +7,35 @@ Agentic AI employee support desk powered by LangGraph multi-agent orchestration.
 ```
 User Request → Supervisor (LLM classifier)
                    ↓
-        ┌──────────┼──────────┐
-        HR    Tech   Finance  Facilities  General  Clarify
-        └──────────┼──────────┘
+        ┌──────────┼──────────────────┐
+        HR    Tech   Finance  Facilities  Analytics  Account  General  Clarify
+        └──────────┼──────────────────┘
                    ↓
            Escalation Check
            ├→ Manager (policy exceptions)
-           ├→ QA Check → Finalize
+           ├→ QA Check (PII redaction) → Finalize
            └→ Fallback (template)
 ```
 
-**Agents:** Supervisor, HR Worker, Tech Worker, Finance Worker, Facilities Worker, General Worker, Clarify Agent, Manager, QA Gate, Fallback
+**Agents:** Supervisor, HR Worker, Tech Worker, Finance Worker, Facilities Worker, Analytics Worker, Account Worker, General Worker, Clarify Agent, Manager, QA Gate, Fallback
 
-**Stack:** FastAPI + LangGraph + Groq (llama-3.3-70b) + SQLite + OpenTelemetry
+**Features:**
+- Multi-agent routing with structured LLM classification
+- RAG-powered policy document retrieval (ChromaDB)
+- ReAct tool-calling loop (up to 3 iterations per worker)
+- QA gate with PII detection/redaction and self-correction retry
+- Per-user password storage (PBKDF2-HMAC-SHA256, 600k iterations)
+- Chat-based password change via the Account agent
+- Admin analytics dashboard with visual UI and chat-based tools
+- Knowledge base management (upload/delete policy docs)
+- Prompt injection guardrails (delimiter-wrapped user input)
+- Rate limiting, security headers, input validation
 
-**Observability:** Prometheus metrics + structured JSON logs (Loki) + distributed tracing
+**Stack:** FastAPI + LangGraph + Groq (llama-3.3-70b) + SQLite + ChromaDB + OpenTelemetry
 
-**Login:** Any email + password `brainupgrade`
+**Observability:** Prometheus metrics + structured JSON logs (Loki) + distributed tracing + Langfuse (optional)
+
+**Login:** Any email + shared password (default `brainupgrade`). On first login, the password is hashed and stored per-user. Subsequent logins use the stored hash.
 
 ## Quick Start (Local)
 
@@ -84,17 +96,23 @@ kubectl logs deployment/frontdeskai
 ## Project Structure
 
 ```
-├── app.py              # FastAPI application with auth, chat, and history
-├── agents.py           # LangGraph multi-agent graph definition
+├── app.py              # FastAPI application with auth, chat, KB management, analytics API
+├── agents.py           # LangGraph multi-agent graph (supervisor, workers, QA, escalation)
+├── auth.py             # Per-user password hashing (PBKDF2) and storage
+├── tools.py            # Domain tool definitions (HR, Tech, Finance, Facilities, Analytics, Account)
+├── rag.py              # RAG pipeline — ChromaDB indexing and retrieval
 ├── observability.py    # OpenTelemetry metrics, tracing, and JSON logging
 ├── requirements.txt    # Python dependencies
 ├── Containerfile       # Container image (python:3.13-slim)
 ├── templates/
 │   ├── login.html      # Login page
-│   └── chat.html       # Chat interface
+│   ├── chat.html       # Chat interface with admin controls
+│   ├── kb.html         # Knowledge base management (admin)
+│   └── analytics.html  # Analytics dashboard (admin)
 ├── static/
 │   └── style.css       # UI styles
-├── data/               # Knowledge base / reference data
+├── data/
+│   └── policies/       # Policy markdown documents (RAG source)
 └── k8s/                # Kubernetes deployment manifests
 ```
 
@@ -103,8 +121,30 @@ kubectl logs deployment/frontdeskai
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `GROQ_API_KEY` | Groq API key for LLM access | (required) |
-| `SECRET_KEY` | JWT signing secret | `frontdeskai-default-secret-change-me` |
+| `SECRET_KEY` | JWT signing secret | Auto-generated per session (required in production) |
+| `AUTH_PASSWORD` | Shared password for first-time login | `brainupgrade` |
+| `ADMIN_EMAILS` | Comma-separated admin emails | `admin@unigps.in` |
 | `SQLITE_DIR` | SQLite database directory | `/shared/.sqlite` |
+| `LANGFUSE_PUBLIC_KEY` | Langfuse public key (optional) | — |
+| `LANGFUSE_SECRET_KEY` | Langfuse secret key (optional) | — |
+| `LANGFUSE_HOST` | Langfuse host URL (optional) | — |
+
+## Authentication
+
+FrontDesk AI uses per-user password storage with PBKDF2-HMAC-SHA256 hashing (600k iterations, 32-byte salt):
+
+1. **First login:** Password is verified against the shared `AUTH_PASSWORD` env var, then a hashed copy is stored in the `users` table of `history.db`
+2. **Subsequent logins:** Password is verified against the stored per-user hash (shared password no longer works for that user)
+3. **Password change:** Users can change their password via the chat interface by saying "I want to change my password" — the Account agent handles this securely using a `ContextVar` to pass the authenticated identity (the LLM cannot influence which user's password is changed)
+
+## Databases
+
+| Database | Location | Purpose |
+|----------|----------|---------|
+| `history.db` | `$SQLITE_DIR/history.db` | Chat message history + `users` table (per-user password hashes) |
+| `frontdesk_tools.db` | `$SQLITE_DIR/frontdesk_tools.db` | Business data: employees, leave, tickets, expenses, rooms, payslips |
+| `checkpoints.db` | `$SQLITE_DIR/checkpoints.db` | LangGraph checkpointer state |
+| `chroma/` | `$SQLITE_DIR/chroma/` | ChromaDB vector store for RAG |
 
 ## Observability
 
@@ -149,6 +189,17 @@ rate(frontdeskai_category_total[5m])
 # Error rate
 rate(frontdeskai_agent_errors_total[5m])
 ```
+
+## Security
+
+- Per-user PBKDF2 password hashing (OWASP 2024 compliant)
+- JWT tokens with 24h expiry, `httponly` + `samesite=strict` cookies
+- Security headers: CSP, X-Frame-Options DENY, nosniff, referrer policy
+- Rate limiting on login (5/min), chat (10/min), KB uploads (5/hr), analytics (30/min)
+- Input validation: message length limits, UTF-8 checks, path traversal protection
+- Prompt injection guardrails: delimiter-wrapped user input, PII detection/redaction
+- Admin access gated by `ADMIN_EMAILS` env var
+- ContextVar-based identity for tool calls (server-set, LLM cannot influence)
 
 ## Access
 
