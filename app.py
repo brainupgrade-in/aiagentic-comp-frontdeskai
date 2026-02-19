@@ -565,7 +565,7 @@ async def kb_upload(request: Request, file: UploadFile = File(...)):
     chunk_count = index_documents(force=True)
     obs.logger.info(
         "Knowledge base updated",
-        extra={"filename": safe_filename, "chunks": chunk_count, "admin": user},
+        extra={"doc_filename": safe_filename, "chunks": chunk_count, "admin": user},
     )
 
     return {"status": "ok", "filename": safe_filename, "total_chunks": chunk_count}
@@ -591,7 +591,7 @@ async def kb_delete(request: Request, filename: str = Form(...)):
     chunk_count = index_documents(force=True)
     obs.logger.info(
         "Knowledge base document deleted",
-        extra={"filename": safe_name, "chunks": chunk_count, "admin": user},
+        extra={"doc_filename": safe_name, "chunks": chunk_count, "admin": user},
     )
 
     return {"status": "ok", "deleted": safe_name, "total_chunks": chunk_count}
