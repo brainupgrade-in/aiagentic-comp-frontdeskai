@@ -31,7 +31,7 @@ User Request → Supervisor (LLM classifier)
 - Admin analytics dashboard with visual UI and chat-based tools
 - Knowledge base management (upload/delete policy docs)
 - Prompt injection guardrails (delimiter-wrapped user input)
-- Rate limiting, security headers, input validation
+- Security headers, input validation
 
 **Stack:** FastAPI + LangGraph + Groq/OpenRouter (admin-configurable) + SQLite + ChromaDB + OpenTelemetry
 
@@ -246,7 +246,6 @@ rate(frontdeskai_agent_errors_total[5m])
 - Per-user PBKDF2 password hashing (OWASP 2024 compliant)
 - JWT tokens with 24h expiry, `httponly` + `samesite=strict` cookies
 - Security headers: CSP, X-Frame-Options DENY, nosniff, referrer policy
-- Rate limiting on login (5/min), chat (10/min), KB uploads (5/hr), analytics (30/min)
 - Input validation: message length limits, UTF-8 checks, path traversal protection
 - Prompt injection guardrails: delimiter-wrapped user input, PII detection/redaction
 - Admin access gated by `ADMIN_EMAILS` env var

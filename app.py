@@ -14,9 +14,6 @@ from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from langgraph.checkpoint.sqlite import SqliteSaver
-from slowapi import Limiter
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
 
 from agents import build_graph
 from auth import get_user_password, set_user_password, verify_password, current_user_email, _get_auth_db
@@ -139,14 +136,7 @@ async def lifespan(application: FastAPI):
     obs.logger.info("FrontDesk AI shutting down")
 
 
-limiter = Limiter(key_func=get_remote_address)
-
 app = FastAPI(title="FrontDesk AI", lifespan=lifespan)
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, lambda req, exc: JSONResponse(
-    status_code=429,
-    content={"detail": "Too many requests. Please slow down."},
-))
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
     response = await call_next(request)
@@ -179,7 +169,6 @@ async def login_page(request: Request):
 
 
 @app.post("/login", response_class=HTMLResponse)
-@limiter.limit("5/minute")
 async def login(request: Request, email: str = Form(...), password: str = Form(...)):
     if not email or "@" not in email:
         return templates.TemplateResponse(
@@ -255,7 +244,6 @@ async def chat_page(request: Request):
 
 
 @app.post("/chat/send", response_class=JSONResponse)
-@limiter.limit("10/minute")
 async def send_message(request: Request, message: str = Form(...)):
     user = get_current_user(request)
     if not user:
@@ -457,7 +445,6 @@ def _remove_fewshot_example(conn, message_id: int) -> None:
 
 
 @app.post("/chat/feedback", response_class=JSONResponse)
-@limiter.limit("30/minute")
 async def chat_feedback(request: Request):
     """Submit thumbs up/down feedback on an assistant message."""
     user = get_current_user(request)
@@ -548,7 +535,6 @@ async def kb_page(request: Request):
 
 
 @app.post("/kb/upload", response_class=JSONResponse)
-@limiter.limit("5/hour")
 async def kb_upload(request: Request, file: UploadFile = File(...)):
     """Upload a new policy document — admin only. Re-indexes the vector store."""
     user = _require_admin(get_current_user(request))
@@ -587,7 +573,6 @@ async def kb_upload(request: Request, file: UploadFile = File(...)):
 
 
 @app.post("/kb/delete", response_class=JSONResponse)
-@limiter.limit("10/hour")
 async def kb_delete(request: Request, filename: str = Form(...)):
     """Delete a policy document — admin only. Re-indexes the vector store."""
     user = _require_admin(get_current_user(request))
@@ -624,7 +609,6 @@ async def analytics_page(request: Request):
 
 
 @app.get("/analytics/data", response_class=JSONResponse)
-@limiter.limit("30/minute")
 async def analytics_data(request: Request):
     """JSON API returning all analytics metrics — admin only."""
     user = _require_admin(get_current_user(request))
