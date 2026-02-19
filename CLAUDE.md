@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-FrontDesk AI is a multi-agent employee support desk built with FastAPI, LangGraph, and Groq (llama-3.3-70b). It routes employee chat requests through a supervisor agent to domain-specific workers (HR, Tech, Finance, Facilities, Analytics, Account), with RAG-powered policy retrieval, tool-calling, QA checks, and escalation handling.
+FrontDesk AI is a multi-agent employee support desk built with FastAPI, LangGraph, and Groq (llama-3.3-70b). It routes employee chat requests through a supervisor agent to domain-specific workers (HR, Tech, Finance, Facilities, Analytics, Account, Skill Admin), with RAG-powered policy retrieval, tool-calling, QA checks, escalation handling, and dynamic skill installation.
 
 ## Quick Start
 
@@ -20,7 +20,8 @@ Requires `GROQ_API_KEY` in `.env` file.
 app.py (FastAPI)
   ├── auth.py          — per-user password hashing (PBKDF2), ContextVar identity
   ├── agents.py        — LangGraph graph: supervisor → RAG → workers → QA → finalize
-  │     └── tools.py   — domain tools (HR, Tech, Finance, Facilities, Analytics, Account)
+  │     ├── tools.py   — domain tools (HR, Tech, Finance, Facilities, Analytics, Account)
+  │     └── skills.py  — dynamic skill registry, admin tools (search, fetch, install, list)
   ├── rag.py           — ChromaDB vector store, document indexing, retrieval
   └── observability.py — Prometheus metrics, structured logging, tracing
 ```
@@ -30,26 +31,29 @@ app.py (FastAPI)
 | File | Purpose |
 |------|---------|
 | `app.py` | FastAPI routes: login, chat, KB management, analytics API, admin gates |
-| `agents.py` | LangGraph StateGraph: supervisor, 7 domain workers, QA, manager, fallback |
+| `agents.py` | LangGraph StateGraph: supervisor, 8 domain workers, QA, manager, fallback |
 | `auth.py` | Password hashing (PBKDF2-SHA256, 600k iter), `users` table, `current_user_email` ContextVar |
 | `tools.py` | LangChain `@tool` functions for each domain + schema/seed data |
-| `rag.py` | ChromaDB indexing of `data/policies/*.md`, retrieval with category filtering |
+| `skills.py` | Dynamic skill registry: load/install/list skills, web research tools, runtime tool injection |
+| `rag.py` | ChromaDB indexing of `data/policies/*.md`, retrieval with category filtering (ONNX embeddings, no torch) |
 | `observability.py` | OpenTelemetry metrics, Prometheus exporter, JSON logging, Langfuse integration |
 
 ## Agent Categories
 
-`hr`, `tech`, `finance`, `facilities`, `analytics`, `account`, `general`
+`hr`, `tech`, `finance`, `facilities`, `analytics`, `account`, `skill_admin`, `general`
 
 - **hr/tech/finance/facilities**: Route through RAG retrieval, then domain worker with tools
 - **analytics**: Bypasses RAG, goes directly to analytics worker with analytics tools
 - **account**: Bypasses RAG, goes directly to account worker with `change_my_password` tool
+- **skill_admin**: Bypasses RAG, admin-only (non-admins routed to general). Tools: `search_web`, `fetch_webpage`, `install_skill`, `list_skills`. Workers also get dynamically-injected skill tools matching their category.
 - **general**: Static response, no tools
 
-## Databases (all in `$SQLITE_DIR`, default `/shared/.sqlite`)
+## Databases & Storage (all in `$SQLITE_DIR`, default `/shared/.sqlite`)
 
 - `history.db` — chat messages + `users` table (per-user password hashes)
 - `frontdesk_tools.db` — employees, leave, tickets, expenses, rooms, payslips
 - `checkpoints.db` — LangGraph checkpointer
+- `/shared/.frontdeskai/skills/` — dynamic skill Python files (loaded at startup + on install)
 
 ## Authentication Flow
 
@@ -73,6 +77,9 @@ python -c "from agents import build_graph; g = build_graph(); print(sorted(g.nod
 # Verify tools
 python -c "from tools import DOMAIN_TOOLS; print(list(DOMAIN_TOOLS.keys()))"
 
+# Verify skills module
+python -c "from skills import load_all_skills; print(load_all_skills())"
+
 # Build and deploy to K8s
 bash k8s/build-and-push.sh
 kubectl rollout restart deployment/frontdeskai
@@ -94,6 +101,8 @@ kubectl rollout restart deployment/frontdeskai
 - Domain tools are registered in `DOMAIN_TOOLS` dict in `tools.py`
 - Workers are created via `make_domain_worker()` factory in `agents.py`
 - New agent categories require updates to: `Classification.category` Literal, supervisor prompt, `WORKER_CONFIGS`, worker creation, `_WORKER_FNS`, `build_graph()`, `_VALID_CATEGORIES` in `app.py`, and fallback templates
+- Dynamic skills are Python files in `SKILLS_DIR` with `SKILL_META` dict and `@tool` functions; they are auto-loaded at startup and can be installed at runtime by admins via chat
+- Skill tools are injected into domain workers at invocation time based on the skill's `categories` list — zero overhead when no skills target a category
 - Admin routes use `_require_admin()` helper, gated by `ADMIN_EMAILS`
 - User input in prompts is wrapped in `[USER_REQUEST_START]`/`[USER_REQUEST_END]` delimiters
 - All SQL uses parameterized queries; column names are never constructed from user input

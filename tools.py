@@ -1074,6 +1074,8 @@ TECH_TOOLS = [create_ticket, get_ticket_status, list_my_tickets]
 FINANCE_TOOLS = [get_expense_status, submit_expense_claim, get_payslip]
 FACILITIES_TOOLS = [check_room_availability, book_meeting_room]
 
+from skills import SKILL_ADMIN_TOOLS
+
 DOMAIN_TOOLS = {
     "hr": HR_TOOLS,
     "tech": TECH_TOOLS,
@@ -1081,4 +1083,5 @@ DOMAIN_TOOLS = {
     "facilities": FACILITIES_TOOLS,
     "analytics": ANALYTICS_TOOLS,
     "account": ACCOUNT_TOOLS,
+    "skill_admin": SKILL_ADMIN_TOOLS,
 }

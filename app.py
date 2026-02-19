@@ -21,6 +21,7 @@ from slowapi.errors import RateLimitExceeded
 from agents import build_graph
 from auth import get_user_password, set_user_password, verify_password, current_user_email, _get_auth_db
 from rag import index_documents
+from skills import load_all_skills
 from tools import HISTORY_DB
 import observability as obs
 from observability import init_observability, get_metrics_app, get_tracer, get_langfuse_handler
@@ -132,6 +133,8 @@ async def lifespan(application: FastAPI):
     # Index policy documents into vector store on startup
     chunk_count = index_documents()
     obs.logger.info("RAG index ready", extra={"chunks": chunk_count})
+    skill_count = load_all_skills()
+    obs.logger.info("Skills loaded", extra={"skills": skill_count})
     yield
     obs.logger.info("FrontDesk AI shutting down")
 
@@ -311,6 +314,7 @@ async def send_message(request: Request, message: str = Form(...)):
                         "employee_name": employee_name,
                         "request": message,
                         "conversation_history": conversation_history,
+                        "is_admin": user in ADMIN_EMAILS,
                         "category": "",
                         "confidence": 0,
                         "rag_context": "",
@@ -336,7 +340,7 @@ async def send_message(request: Request, message: str = Form(...)):
 
             result = await asyncio.to_thread(run_graph)
 
-            _VALID_CATEGORIES = {"hr", "tech", "finance", "facilities", "analytics", "account", "general"}
+            _VALID_CATEGORIES = {"hr", "tech", "finance", "facilities", "analytics", "account", "skill_admin", "general"}
             category = result.get("category", "")
             if category not in _VALID_CATEGORIES:
                 category = "general"

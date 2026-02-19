@@ -7,9 +7,9 @@ Agentic AI employee support desk powered by LangGraph multi-agent orchestration.
 ```
 User Request → Supervisor (LLM classifier)
                    ↓
-        ┌──────────┼──────────────────┐
-        HR    Tech   Finance  Facilities  Analytics  Account  General  Clarify
-        └──────────┼──────────────────┘
+        ┌──────────┼───────────────────────────────┐
+        HR    Tech   Finance  Facilities  Analytics  Account  Skill Admin  General  Clarify
+        └──────────┼───────────────────────────────┘
                    ↓
            Escalation Check
            ├→ Manager (policy exceptions)
@@ -17,15 +17,16 @@ User Request → Supervisor (LLM classifier)
            └→ Fallback (template)
 ```
 
-**Agents:** Supervisor, HR Worker, Tech Worker, Finance Worker, Facilities Worker, Analytics Worker, Account Worker, General Worker, Clarify Agent, Manager, QA Gate, Fallback
+**Agents:** Supervisor, HR Worker, Tech Worker, Finance Worker, Facilities Worker, Analytics Worker, Account Worker, Skill Admin Worker, General Worker, Clarify Agent, Manager, QA Gate, Fallback
 
 **Features:**
 - Multi-agent routing with structured LLM classification
-- RAG-powered policy document retrieval (ChromaDB)
+- RAG-powered policy document retrieval (ChromaDB with ONNX embeddings — no torch/CUDA required)
 - ReAct tool-calling loop (up to 3 iterations per worker)
 - QA gate with PII detection/redaction and self-correction retry
 - Per-user password storage (PBKDF2-HMAC-SHA256, 600k iterations)
 - Chat-based password change via the Account agent
+- Dynamic skill installation — admins can teach the system new capabilities via chat (web research → code generation → install → immediate availability)
 - Admin analytics dashboard with visual UI and chat-based tools
 - Knowledge base management (upload/delete policy docs)
 - Prompt injection guardrails (delimiter-wrapped user input)
@@ -100,7 +101,8 @@ kubectl logs deployment/frontdeskai
 ├── agents.py           # LangGraph multi-agent graph (supervisor, workers, QA, escalation)
 ├── auth.py             # Per-user password hashing (PBKDF2) and storage
 ├── tools.py            # Domain tool definitions (HR, Tech, Finance, Facilities, Analytics, Account)
-├── rag.py              # RAG pipeline — ChromaDB indexing and retrieval
+├── skills.py           # Dynamic skill registry — load, install, list skills + web research tools
+├── rag.py              # RAG pipeline — ChromaDB indexing and retrieval (ONNX embeddings, no torch)
 ├── observability.py    # OpenTelemetry metrics, tracing, and JSON logging
 ├── requirements.txt    # Python dependencies
 ├── Containerfile       # Container image (python:3.13-slim)
@@ -137,6 +139,36 @@ FrontDesk AI uses per-user password storage with PBKDF2-HMAC-SHA256 hashing (600
 2. **Subsequent logins:** Password is verified against the stored per-user hash (shared password no longer works for that user)
 3. **Password change:** Users can change their password via the chat interface by saying "I want to change my password" — the Account agent handles this securely using a `ContextVar` to pass the authenticated identity (the LLM cannot influence which user's password is changed)
 
+## Dynamic Skills
+
+Admins can teach FrontDesk AI new capabilities at runtime — no restart required.
+
+**How it works:**
+1. Admin says: *"Install a weather lookup skill"*
+2. Supervisor routes to `skill_admin` worker (non-admins are denied)
+3. The worker uses `search_web` and `fetch_webpage` to research APIs
+4. It generates a Python skill file with `SKILL_META` and `@tool` functions
+5. `install_skill` validates the code (AST parse, checks for required structure), saves to `/shared/.frontdeskai/skills/`, and loads it immediately
+6. The skill's tools become available to domain workers matching the skill's `categories`
+
+**Skill file format:**
+```python
+SKILL_META = {"name": "weather", "description": "Weather lookup", "categories": ["facilities"]}
+from langchain_core.tools import tool
+
+@tool
+def get_weather(city: str) -> str:
+    """Get current weather for a city."""
+    import urllib.request, json
+    resp = urllib.request.urlopen(f"https://wttr.in/{city}?format=j1")
+    data = json.loads(resp.read())
+    return f"{city}: {data['current_condition'][0]['temp_C']}°C"
+```
+
+**Admin commands via chat:**
+- *"Install a skill to check weather forecasts"* — researches, generates, and installs
+- *"List installed skills"* — shows all loaded skills with their tools and categories
+
 ## Databases
 
 | Database | Location | Purpose |
@@ -145,6 +177,7 @@ FrontDesk AI uses per-user password storage with PBKDF2-HMAC-SHA256 hashing (600
 | `frontdesk_tools.db` | `$SQLITE_DIR/frontdesk_tools.db` | Business data: employees, leave, tickets, expenses, rooms, payslips |
 | `checkpoints.db` | `$SQLITE_DIR/checkpoints.db` | LangGraph checkpointer state |
 | `chroma/` | `$SQLITE_DIR/chroma/` | ChromaDB vector store for RAG |
+| `skills/` | `/shared/.frontdeskai/skills/` | Dynamic skill Python files (loaded at startup) |
 
 ## Observability
 

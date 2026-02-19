@@ -18,6 +18,7 @@ from observability import trace_llm_call
 from rag import retrieve, format_context, format_sources
 from fewshot import retrieve_examples, format_fewshot_context
 from tools import DOMAIN_TOOLS
+from skills import get_skill_tools
 
 llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
 
@@ -29,7 +30,7 @@ MAX_QA_RETRIES = 1        # max times QA can send worker back for self-correctio
 
 class Classification(BaseModel):
     """Supervisor classification of an employee support request."""
-    category: Literal["hr", "tech", "finance", "facilities", "analytics", "account", "general"] = Field(
+    category: Literal["hr", "tech", "finance", "facilities", "analytics", "account", "skill_admin", "general"] = Field(
         description="The department that should handle this request"
     )
     confidence: int = Field(
@@ -57,6 +58,7 @@ class SupportRequest(TypedDict):
     employee_name: str
     request: str
     conversation_history: list[dict]  # prior turns: [{"role": "user"|"assistant", "content": "..."}]
+    is_admin: bool  # whether the user is an admin (for skill_admin gating)
     category: str
     confidence: int
     rag_context: str        # retrieved policy text injected into worker prompts
@@ -110,6 +112,7 @@ SUPERVISOR_PROMPT = ChatPromptTemplate.from_messages([
         "- facilities: Desks, parking, cafeteria, access cards, building, maintenance\n"
         "- analytics: Business metrics, dashboards, reports, conversation stats, escalation rates, ticket summaries, utilization data\n"
         "- account: Password changes, account settings, login issues\n"
+        "- skill_admin: Install new skills/capabilities, manage AI skills, add new tools (ADMIN ONLY)\n"
         "- general: Anything that doesn't fit the above categories\n\n"
         "Examples:\n"
         "- 'I need to apply for 3 days leave' → hr, confidence 9\n"
@@ -121,6 +124,9 @@ SUPERVISOR_PROMPT = ChatPromptTemplate.from_messages([
         "- 'Show me room utilization stats' → analytics, confidence 9\n"
         "- 'I want to change my password' → account, confidence 9\n"
         "- 'How do I reset my login password?' → account, confidence 8\n"
+        "- 'Install a weather lookup skill' → skill_admin, confidence 9\n"
+        "- 'List installed skills' → skill_admin, confidence 9\n"
+        "- 'Add a new capability to check stock prices' → skill_admin, confidence 9\n"
         "- 'Hello, how are you?' → general, confidence 7\n"
         "- 'something something' → general, confidence 3\n\n"
         "Use the conversation history (if any) to understand context. "
@@ -168,6 +174,9 @@ def supervisor(state: SupportRequest) -> dict:
 def route_supervisor(state: SupportRequest) -> str:
     if state["confidence"] < 5:
         return "clarify"
+    # Gate skill_admin: only admins can access; non-admins get routed to general
+    if state["category"] == "skill_admin" and not state.get("is_admin"):
+        return "general"
     return state["category"]
 
 
@@ -271,6 +280,25 @@ WORKER_CONFIGS = {
         ),
         "can_escalate": False,
     },
+    "skill_admin": {
+        "system_prompt": (
+            "You are the FrontDesk AI Skill Installer. You help admins add new capabilities.\n\n"
+            "When asked to install a skill, follow this process:\n"
+            "1. RESEARCH: Use search_web to find relevant APIs, libraries, or approaches\n"
+            "2. LEARN: Use fetch_webpage to read API documentation or examples\n"
+            "3. WRITE CODE: Generate a complete Python skill file with:\n"
+            "   - SKILL_META = {'name': '...', 'description': '...', 'categories': ['...']}\n"
+            "   - from langchain_core.tools import tool\n"
+            "   - One or more @tool decorated functions\n"
+            "   - Use only stdlib imports (urllib, json, etc.) — no pip installs\n"
+            "4. INSTALL: Use install_skill with the skill name, description, and complete code\n\n"
+            "Categories for skills: hr, tech, finance, facilities, analytics, account\n"
+            "A skill can target multiple categories.\n\n"
+            "When asked to list skills, use list_skills.\n"
+            "Always explain what you found and what the skill does after installing."
+        ),
+        "can_escalate": False,
+    },
 }
 
 worker_llm = llm.with_structured_output(WorkerResponse)
@@ -361,15 +389,31 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
                     "Please provide an improved response that addresses this feedback."
                 )))
 
+            # Dynamic skill tool injection: check for loaded skill tools targeting this category
+            skill_tools = get_skill_tools(name)
+            if skill_tools:
+                active_tools = domain_tools + skill_tools
+                active_tools_by_name = {t.name: t for t in active_tools}
+                active_tool_llm = llm.bind_tools(active_tools)
+                skill_tool_names = ", ".join(t.name for t in skill_tools)
+                messages.append(SystemMessage(content=(
+                    f"Additional skill tools are available: {skill_tool_names}. "
+                    "Use them when relevant to the employee's request."
+                )))
+            else:
+                active_tools = domain_tools
+                active_tools_by_name = tools_by_name
+                active_tool_llm = tool_llm
+
             tool_calls_log = []
             react_iterations = 0
 
             # === ReAct Loop: Think → Act → Observe ===
-            if tool_llm and domain_tools:
+            if active_tool_llm and active_tools:
                 for iteration in range(MAX_TOOL_ITERATIONS):
                     react_iterations += 1
                     with trace_llm_call(f"{name}_react_iter_{iteration}") as ctx:
-                        response = tool_llm.invoke(messages)
+                        response = active_tool_llm.invoke(messages)
                         ctx["response"] = response
 
                     if not response.tool_calls:
@@ -378,7 +422,7 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
 
                     # ACT: Execute tool calls
                     messages.append(response)
-                    tool_results = _execute_tool_calls(response, tools_by_name)
+                    tool_results = _execute_tool_calls(response, active_tools_by_name)
                     messages.extend(tool_results)
 
                     for tc in response.tool_calls:
@@ -432,6 +476,7 @@ finance_worker = make_domain_worker("finance", **WORKER_CONFIGS["finance"])
 facilities_worker = make_domain_worker("facilities", **WORKER_CONFIGS["facilities"])
 analytics_worker = make_domain_worker("analytics", **WORKER_CONFIGS["analytics"])
 account_worker = make_domain_worker("account", **WORKER_CONFIGS["account"])
+skill_admin_worker = make_domain_worker("skill_admin", **WORKER_CONFIGS["skill_admin"])
 
 # Map category → worker function for QA retry routing
 _WORKER_FNS: dict = {
@@ -441,6 +486,7 @@ _WORKER_FNS: dict = {
     "facilities": facilities_worker,
     "analytics": analytics_worker,
     "account": account_worker,
+    "skill_admin": skill_admin_worker,
 }
 
 
@@ -656,6 +702,7 @@ def fallback(state: SupportRequest) -> dict:
         "finance": "Please email finance@unigps.in with your query.",
         "facilities": "Please email admin@unigps.in for facilities requests.",
         "account": "Please try logging out and back in. If the issue persists, contact IT at ext. 5555.",
+        "skill_admin": "Skill installation encountered an error. Please try again or contact the system administrator.",
         "general": "Your request has been noted. We'll respond shortly.",
     }
     output = fallback_templates.get(state["category"], fallback_templates["general"])
@@ -702,6 +749,7 @@ def build_graph():
     graph.add_node("facilities_worker", facilities_worker)
     graph.add_node("analytics_worker", analytics_worker)
     graph.add_node("account_worker", account_worker)
+    graph.add_node("skill_admin_worker", skill_admin_worker)
     graph.add_node("general_worker", general_worker)
     graph.add_node("escalation_check", escalation_check)
     graph.add_node("manager", manager_agent)
@@ -720,6 +768,7 @@ def build_graph():
         "facilities": "rag_retrieval",
         "analytics": "analytics_worker",
         "account": "account_worker",
+        "skill_admin": "skill_admin_worker",
         "general": "general_worker",
     })
 
@@ -738,7 +787,7 @@ def build_graph():
     })
 
     graph.add_edge("clarify", "finalize")
-    for w in ["hr_worker", "tech_worker", "finance_worker", "facilities_worker", "analytics_worker", "account_worker", "general_worker"]:
+    for w in ["hr_worker", "tech_worker", "finance_worker", "facilities_worker", "analytics_worker", "account_worker", "skill_admin_worker", "general_worker"]:
         graph.add_edge(w, "escalation_check")
 
     graph.add_conditional_edges("escalation_check", route_escalation, {
