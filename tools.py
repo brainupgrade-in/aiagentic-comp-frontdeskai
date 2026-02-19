@@ -12,6 +12,7 @@ from datetime import datetime
 from langchain_core.tools import tool
 
 TOOLS_DB = os.path.join(os.getenv("SQLITE_DIR", "/shared/.sqlite"), "frontdesk_tools.db")
+HISTORY_DB = os.path.join(os.getenv("SQLITE_DIR", "/shared/.sqlite"), "history.db")
 
 _db_initialized = False
 
@@ -854,6 +855,180 @@ def book_meeting_room(room_name: str, date: str, start_time: str, end_time: str,
         conn.close()
 
 
+# ========== ANALYTICS TOOLS ==========
+
+def _get_history_db() -> sqlite3.Connection:
+    """Get a read-only connection to the conversation history database."""
+    conn = sqlite3.connect(HISTORY_DB)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+@tool
+def get_conversation_stats(period: str = "all") -> str:
+    """Get conversation volume and quality metrics. period: 'today', 'week', 'month', or 'all'."""
+    conn = _get_history_db()
+    try:
+        where = ""
+        if period == "today":
+            where = "WHERE date(created_at) = date('now')"
+        elif period == "week":
+            where = "WHERE date(created_at) >= date('now', '-7 days')"
+        elif period == "month":
+            where = "WHERE date(created_at) >= date('now', '-30 days')"
+
+        # Total messages and unique users
+        row = conn.execute(
+            f"SELECT COUNT(*) as total, COUNT(DISTINCT email) as users "
+            f"FROM messages {where}"
+        ).fetchone()
+        total = row["total"]
+        users = row["users"]
+
+        # Messages by role
+        assistant_where = where.replace("WHERE", "WHERE role='assistant' AND") if where else "WHERE role='assistant'"
+        stats = conn.execute(
+            f"SELECT COUNT(*) as cnt, "
+            f"SUM(CASE WHEN escalated=1 THEN 1 ELSE 0 END) as escalated, "
+            f"SUM(CASE WHEN fallback_used=1 THEN 1 ELSE 0 END) as fallbacks, "
+            f"AVG(confidence) as avg_conf "
+            f"FROM messages {assistant_where}"
+        ).fetchone()
+        responses = stats["cnt"] or 0
+        escalated = stats["escalated"] or 0
+        fallbacks = stats["fallbacks"] or 0
+        avg_conf = stats["avg_conf"] or 0
+
+        esc_rate = (escalated / responses * 100) if responses else 0
+        fb_rate = (fallbacks / responses * 100) if responses else 0
+
+        # Category breakdown
+        cats = conn.execute(
+            f"SELECT category, COUNT(*) as cnt FROM messages "
+            f"{assistant_where} AND category != '' GROUP BY category ORDER BY cnt DESC"
+        ).fetchall()
+        cat_lines = [f"  {c['category']}: {c['cnt']}" for c in cats]
+
+        lines = [
+            f"Conversation Stats ({period}):",
+            f"  Total messages: {total:,}",
+            f"  Unique users: {users:,}",
+            f"  AI responses: {responses:,}",
+            f"  Escalation rate: {esc_rate:.1f}%",
+            f"  Fallback rate: {fb_rate:.1f}%",
+            f"  Avg confidence: {avg_conf:.1f}/10",
+            f"\nCategory breakdown:",
+        ] + (cat_lines or ["  No data"])
+        return "\n".join(lines)
+    finally:
+        conn.close()
+
+
+@tool
+def get_ticket_summary() -> str:
+    """Get a summary of all IT support tickets — counts by status and priority, plus top open tickets."""
+    conn = _get_db()
+    try:
+        by_status = conn.execute(
+            "SELECT status, COUNT(*) as cnt FROM tickets GROUP BY status ORDER BY cnt DESC"
+        ).fetchall()
+        by_priority = conn.execute(
+            "SELECT priority, COUNT(*) as cnt FROM tickets WHERE status NOT IN ('Closed','Resolved') "
+            "GROUP BY priority ORDER BY priority"
+        ).fetchall()
+        open_tickets = conn.execute(
+            "SELECT ticket_id, summary, priority, status, created_at FROM tickets "
+            "WHERE status NOT IN ('Closed','Resolved') "
+            "ORDER BY CASE priority WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 WHEN 'P3' THEN 3 ELSE 4 END LIMIT 10"
+        ).fetchall()
+
+        lines = ["Ticket Summary:", "\nBy status:"]
+        for r in by_status:
+            lines.append(f"  {r['status']}: {r['cnt']}")
+        lines.append("\nOpen tickets by priority:")
+        for r in by_priority:
+            lines.append(f"  {r['priority']}: {r['cnt']}")
+        lines.append(f"\nTop open tickets ({len(open_tickets)}):")
+        for t in open_tickets:
+            lines.append(f"  [{t['priority']}] {t['ticket_id']}: {t['summary']} — {t['status']}")
+        return "\n".join(lines)
+    finally:
+        conn.close()
+
+
+@tool
+def get_expense_summary() -> str:
+    """Get expense claims summary — status breakdown and pending claims list."""
+    conn = _get_db()
+    try:
+        by_status = conn.execute(
+            "SELECT status, COUNT(*) as cnt, SUM(amount) as total FROM expense_claims GROUP BY status"
+        ).fetchall()
+        pending = conn.execute(
+            "SELECT ec.claim_id, e.full_name, ec.amount, ec.category, ec.status, ec.submitted_at "
+            "FROM expense_claims ec JOIN employees e ON ec.employee_id = e.employee_id "
+            "WHERE ec.status IN ('submitted','under_review') ORDER BY ec.submitted_at"
+        ).fetchall()
+
+        lines = ["Expense Claims Summary:", "\nBy status:"]
+        for r in by_status:
+            lines.append(f"  {r['status']}: {r['cnt']} claims, INR {r['total']:,.2f}")
+        lines.append(f"\nPending claims ({len(pending)}):")
+        for p in pending:
+            lines.append(f"  {p['claim_id']}: {p['full_name']} — INR {p['amount']:,.2f} ({p['category']}) — {p['status']}")
+        return "\n".join(lines)
+    finally:
+        conn.close()
+
+
+@tool
+def get_leave_summary() -> str:
+    """Get a summary of pending leave requests across the organization."""
+    conn = _get_db()
+    try:
+        pending = conn.execute(
+            "SELECT lr.*, e.full_name FROM leave_requests lr "
+            "JOIN employees e ON lr.employee_id = e.employee_id "
+            "WHERE lr.status = 'pending' ORDER BY lr.start_date"
+        ).fetchall()
+        lines = [f"Pending Leave Requests ({len(pending)}):"]
+        if not pending:
+            lines.append("  No pending leave requests.")
+        for p in pending:
+            lines.append(
+                f"  {p['full_name']}: {p['leave_type']} leave, "
+                f"{p['start_date']} to {p['end_date']} ({p['days']} days) — {p['reason']}"
+            )
+        return "\n".join(lines)
+    finally:
+        conn.close()
+
+
+@tool
+def get_room_utilization() -> str:
+    """Get meeting room booking counts for the last 7 days."""
+    conn = _get_db()
+    try:
+        rows = conn.execute(
+            "SELECT mr.room_name, COUNT(rb.id) as bookings "
+            "FROM meeting_rooms mr "
+            "LEFT JOIN room_bookings rb ON mr.room_id = rb.room_id "
+            "  AND rb.status = 'confirmed' "
+            "  AND rb.date >= date('now', '-7 days') AND rb.date <= date('now', '+1 day') "
+            "WHERE mr.is_active = 1 "
+            "GROUP BY mr.room_id ORDER BY bookings DESC"
+        ).fetchall()
+        lines = ["Room Utilization (last 7 days):"]
+        for r in rows:
+            lines.append(f"  {r['room_name']}: {r['bookings']} bookings")
+        return "\n".join(lines)
+    finally:
+        conn.close()
+
+
+ANALYTICS_TOOLS = [get_conversation_stats, get_ticket_summary, get_expense_summary, get_leave_summary, get_room_utilization]
+
+
 # ========== TOOL REGISTRY ==========
 
 HR_TOOLS = [get_leave_balance, apply_leave]
@@ -866,4 +1041,5 @@ DOMAIN_TOOLS = {
     "tech": TECH_TOOLS,
     "finance": FINANCE_TOOLS,
     "facilities": FACILITIES_TOOLS,
+    "analytics": ANALYTICS_TOOLS,
 }

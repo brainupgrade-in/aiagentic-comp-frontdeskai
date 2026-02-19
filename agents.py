@@ -28,7 +28,7 @@ MAX_QA_RETRIES = 1        # max times QA can send worker back for self-correctio
 
 class Classification(BaseModel):
     """Supervisor classification of an employee support request."""
-    category: Literal["hr", "tech", "finance", "facilities", "general"] = Field(
+    category: Literal["hr", "tech", "finance", "facilities", "analytics", "general"] = Field(
         description="The department that should handle this request"
     )
     confidence: int = Field(
@@ -103,12 +103,16 @@ SUPERVISOR_PROMPT = ChatPromptTemplate.from_messages([
         "- tech: IT support, VPN, Jira, AWS, software, hardware, production issues\n"
         "- finance: Salary, expenses, reimbursements, tax, invoices\n"
         "- facilities: Desks, parking, cafeteria, access cards, building, maintenance\n"
+        "- analytics: Business metrics, dashboards, reports, conversation stats, escalation rates, ticket summaries, utilization data\n"
         "- general: Anything that doesn't fit the above categories\n\n"
         "Examples:\n"
         "- 'I need to apply for 3 days leave' → hr, confidence 9\n"
         "- 'My VPN is not connecting' → tech, confidence 9\n"
         "- 'When will I get my salary slip?' → finance, confidence 8\n"
         "- 'The AC in meeting room 3 is not working' → facilities, confidence 9\n"
+        "- 'What is the escalation rate this week?' → analytics, confidence 9\n"
+        "- 'How many open tickets do we have?' → analytics, confidence 8\n"
+        "- 'Show me room utilization stats' → analytics, confidence 9\n"
         "- 'Hello, how are you?' → general, confidence 7\n"
         "- 'something something' → general, confidence 3\n\n"
         "Use the conversation history (if any) to understand context. "
@@ -205,6 +209,14 @@ WORKER_CONFIGS = {
     "facilities": {
         "system_prompt": (
             "You are UniGPS Facilities/Admin team."
+        ),
+        "can_escalate": False,
+    },
+    "analytics": {
+        "system_prompt": (
+            "You are the FrontDesk AI analytics assistant. Use the analytics tools to look up "
+            "real data and report it clearly. Format numbers with commas. Present data in a "
+            "readable format with clear labels."
         ),
         "can_escalate": False,
     },
@@ -359,6 +371,7 @@ hr_worker = make_domain_worker("hr", **WORKER_CONFIGS["hr"])
 tech_worker = make_domain_worker("tech", **WORKER_CONFIGS["tech"])
 finance_worker = make_domain_worker("finance", **WORKER_CONFIGS["finance"])
 facilities_worker = make_domain_worker("facilities", **WORKER_CONFIGS["facilities"])
+analytics_worker = make_domain_worker("analytics", **WORKER_CONFIGS["analytics"])
 
 # Map category → worker function for QA retry routing
 _WORKER_FNS: dict = {
@@ -366,6 +379,7 @@ _WORKER_FNS: dict = {
     "tech": tech_worker,
     "finance": finance_worker,
     "facilities": facilities_worker,
+    "analytics": analytics_worker,
 }
 
 
@@ -621,6 +635,7 @@ def build_graph():
     graph.add_node("tech_worker", tech_worker)
     graph.add_node("finance_worker", finance_worker)
     graph.add_node("facilities_worker", facilities_worker)
+    graph.add_node("analytics_worker", analytics_worker)
     graph.add_node("general_worker", general_worker)
     graph.add_node("escalation_check", escalation_check)
     graph.add_node("manager", manager_agent)
@@ -637,6 +652,7 @@ def build_graph():
         "tech": "rag_retrieval",
         "finance": "rag_retrieval",
         "facilities": "rag_retrieval",
+        "analytics": "analytics_worker",
         "general": "general_worker",
     })
 
@@ -652,7 +668,7 @@ def build_graph():
     })
 
     graph.add_edge("clarify", "finalize")
-    for w in ["hr_worker", "tech_worker", "finance_worker", "facilities_worker", "general_worker"]:
+    for w in ["hr_worker", "tech_worker", "finance_worker", "facilities_worker", "analytics_worker", "general_worker"]:
         graph.add_edge(w, "escalation_check")
 
     graph.add_conditional_edges("escalation_check", route_escalation, {

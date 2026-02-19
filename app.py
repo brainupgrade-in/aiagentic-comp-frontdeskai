@@ -397,6 +397,118 @@ async def kb_delete(request: Request, filename: str = Form(...)):
     return {"status": "ok", "deleted": safe_name, "total_chunks": chunk_count}
 
 
+@app.get("/analytics", response_class=HTMLResponse)
+async def analytics_page(request: Request):
+    """Analytics dashboard — admin only."""
+    user = get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+    if user != ADMIN_EMAIL:
+        raise HTTPException(status_code=403, detail="Admin access required (admin@unigps.in)")
+    return templates.TemplateResponse("analytics.html", {"request": request, "user": user})
+
+
+@app.get("/analytics/data", response_class=JSONResponse)
+async def analytics_data(request: Request):
+    """JSON API returning all analytics metrics — admin only."""
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if user != ADMIN_EMAIL:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    from tools import _get_db as get_tools_db
+
+    data = {}
+
+    # --- Conversation stats from history.db ---
+    conn = get_history_db()
+    try:
+        row = conn.execute("SELECT COUNT(*) as total, COUNT(DISTINCT email) as users FROM messages").fetchone()
+        data["total_messages"] = row[0]
+        data["unique_users"] = row[1]
+
+        row = conn.execute("SELECT COUNT(*) FROM messages WHERE date(created_at) = date('now')").fetchone()
+        data["messages_today"] = row[0]
+
+        row = conn.execute("SELECT COUNT(*) FROM messages WHERE date(created_at) >= date('now', '-7 days')").fetchone()
+        data["messages_week"] = row[0]
+
+        # Quality metrics from assistant messages
+        qrow = conn.execute(
+            "SELECT COUNT(*) as cnt, "
+            "SUM(CASE WHEN escalated=1 THEN 1 ELSE 0 END) as escalated, "
+            "SUM(CASE WHEN fallback_used=1 THEN 1 ELSE 0 END) as fallbacks, "
+            "AVG(confidence) as avg_conf "
+            "FROM messages WHERE role='assistant'"
+        ).fetchone()
+        responses = qrow[0] or 0
+        data["escalation_rate"] = round((qrow[1] or 0) / responses * 100, 1) if responses else 0
+        data["fallback_rate"] = round((qrow[2] or 0) / responses * 100, 1) if responses else 0
+        data["avg_confidence"] = round(qrow[3] or 0, 1)
+
+        # Category distribution
+        cats = conn.execute(
+            "SELECT category, COUNT(*) as cnt FROM messages "
+            "WHERE role='assistant' AND category != '' GROUP BY category ORDER BY cnt DESC"
+        ).fetchall()
+        data["categories"] = [{"name": c[0], "count": c[1]} for c in cats]
+    finally:
+        conn.close()
+
+    # --- Tickets from tools db ---
+    tconn = get_tools_db()
+    try:
+        by_status = tconn.execute("SELECT status, COUNT(*) as cnt FROM tickets GROUP BY status").fetchall()
+        data["tickets_by_status"] = [{"status": r["status"], "count": r["cnt"]} for r in by_status]
+
+        by_priority = tconn.execute(
+            "SELECT priority, COUNT(*) as cnt FROM tickets "
+            "WHERE status NOT IN ('Closed','Resolved') GROUP BY priority ORDER BY priority"
+        ).fetchall()
+        data["tickets_by_priority"] = [{"priority": r["priority"], "count": r["cnt"]} for r in by_priority]
+
+        # Pending expenses
+        expenses = tconn.execute(
+            "SELECT ec.claim_id, e.full_name, ec.amount, ec.category, ec.status "
+            "FROM expense_claims ec JOIN employees e ON ec.employee_id = e.employee_id "
+            "WHERE ec.status IN ('submitted','under_review') ORDER BY ec.submitted_at"
+        ).fetchall()
+        data["pending_expenses"] = [
+            {"claim_id": r["claim_id"], "employee": r["full_name"], "amount": r["amount"],
+             "category": r["category"], "status": r["status"]}
+            for r in expenses
+        ]
+        data["pending_expenses_total"] = sum(r["amount"] for r in expenses)
+
+        # Pending leaves
+        leaves = tconn.execute(
+            "SELECT lr.leave_type, lr.start_date, lr.end_date, lr.days, e.full_name "
+            "FROM leave_requests lr JOIN employees e ON lr.employee_id = e.employee_id "
+            "WHERE lr.status = 'pending' ORDER BY lr.start_date"
+        ).fetchall()
+        data["pending_leaves"] = [
+            {"employee": r["full_name"], "type": r["leave_type"], "start": r["start_date"],
+             "end": r["end_date"], "days": r["days"]}
+            for r in leaves
+        ]
+
+        # Room utilization (last 7 days)
+        rooms = tconn.execute(
+            "SELECT mr.room_name, COUNT(rb.id) as bookings "
+            "FROM meeting_rooms mr "
+            "LEFT JOIN room_bookings rb ON mr.room_id = rb.room_id "
+            "  AND rb.status = 'confirmed' "
+            "  AND rb.date >= date('now', '-7 days') AND rb.date <= date('now', '+1 day') "
+            "WHERE mr.is_active = 1 GROUP BY mr.room_id ORDER BY bookings DESC"
+        ).fetchall()
+        data["room_utilization"] = [{"room": r["room_name"], "bookings": r["bookings"]} for r in rooms]
+    finally:
+        tconn.close()
+
+    return data
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "frontdeskai"}

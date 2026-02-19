@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FrontDesk AI — Analytics</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="chat-body">
+    <header class="chat-header">
+        <div class="header-left">
+            <svg width="32" height="32" viewBox="0 0 48 48" fill="none">
+                <rect width="48" height="48" rx="12" fill="#6366f1"/>
+                <path d="M14 16h20v2H14zm0 6h16v2H14zm0 6h12v2H14zm0 6h8v2H14z" fill="white"/>
+                <circle cx="36" cy="32" r="6" fill="#22d3ee"/>
+                <path d="M34 32l2 2 3-3" stroke="white" stroke-width="1.5" fill="none"/>
+            </svg>
+            <span class="header-title">FrontDesk AI — Analytics</span>
+        </div>
+        <div class="header-right">
+            <a href="/chat" class="btn-logout" style="margin-right:8px;">Chat</a>
+            <a href="/kb" class="btn-logout" style="margin-right:8px;">Knowledge Base</a>
+            <span class="user-badge">{{ user }}</span>
+            <a href="/logout" class="btn-logout">Logout</a>
+        </div>
+    </header>
+
+    <main class="analytics-main">
+        <div class="analytics-container" id="dashboard">
+            <div class="analytics-loading" id="loadingState">Loading analytics data...</div>
+        </div>
+    </main>
+
+    <script>
+        async function loadDashboard() {
+            try {
+                const res = await fetch('/analytics/data');
+                if (res.status === 401) { window.location.href = '/login'; return; }
+                if (!res.ok) throw new Error('Failed to load');
+                const d = await res.json();
+                render(d);
+            } catch (e) {
+                document.getElementById('loadingState').textContent = 'Failed to load analytics data.';
+            }
+        }
+
+        function render(d) {
+            const c = document.getElementById('dashboard');
+            const maxCat = d.categories.length ? Math.max(...d.categories.map(x => x.count)) : 1;
+            const maxRoom = d.room_utilization.length ? Math.max(...d.room_utilization.map(x => x.bookings)) : 1;
+
+            c.innerHTML = `
+                <!-- Stat Cards -->
+                <div class="analytics-row">
+                    ${statCard('Total Messages', fmt(d.total_messages), 'var(--accent)')}
+                    ${statCard('Unique Users', fmt(d.unique_users), 'var(--cyan)')}
+                    ${statCard('Messages Today', fmt(d.messages_today), 'var(--green)')}
+                    ${statCard('Messages This Week', fmt(d.messages_week), 'var(--yellow)')}
+                </div>
+
+                <!-- Quality Metrics -->
+                <div class="analytics-row">
+                    ${statCard('Escalation Rate', d.escalation_rate + '%', d.escalation_rate > 20 ? 'var(--red)' : 'var(--green)')}
+                    ${statCard('Fallback Rate', d.fallback_rate + '%', d.fallback_rate > 15 ? 'var(--orange)' : 'var(--green)')}
+                    ${statCard('Avg Confidence', d.avg_confidence + '/10', d.avg_confidence >= 7 ? 'var(--green)' : 'var(--orange)')}
+                </div>
+
+                <!-- Category Distribution -->
+                <div class="analytics-section">
+                    <h3 class="analytics-section-title">Category Distribution</h3>
+                    <div class="analytics-bars">
+                        ${d.categories.map(cat => `
+                            <div class="analytics-bar-row">
+                                <span class="analytics-bar-label">${esc(cat.name)}</span>
+                                <div class="analytics-bar-track">
+                                    <div class="analytics-bar-fill analytics-bar-${cat.name}" style="width:${Math.max(cat.count / maxCat * 100, 2)}%"></div>
+                                </div>
+                                <span class="analytics-bar-value">${cat.count}</span>
+                            </div>
+                        `).join('')}
+                        ${d.categories.length === 0 ? '<div class="analytics-empty">No data yet</div>' : ''}
+                    </div>
+                </div>
+
+                <!-- Tickets -->
+                <div class="analytics-row analytics-row-2col">
+                    <div class="analytics-section">
+                        <h3 class="analytics-section-title">Open Tickets by Priority</h3>
+                        ${d.tickets_by_priority.length ? d.tickets_by_priority.map(t => `
+                            <div class="analytics-kv">
+                                <span class="analytics-kv-key">${esc(t.priority)}</span>
+                                <span class="analytics-kv-val">${t.count}</span>
+                            </div>
+                        `).join('') : '<div class="analytics-empty">No open tickets</div>'}
+                    </div>
+                    <div class="analytics-section">
+                        <h3 class="analytics-section-title">All Tickets by Status</h3>
+                        ${d.tickets_by_status.map(t => `
+                            <div class="analytics-kv">
+                                <span class="analytics-kv-key">${esc(t.status)}</span>
+                                <span class="analytics-kv-val">${t.count}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+
+                <!-- Pending Expenses -->
+                <div class="analytics-section">
+                    <h3 class="analytics-section-title">Pending Expenses
+                        <span class="analytics-section-badge">INR ${fmt(d.pending_expenses_total, true)}</span>
+                    </h3>
+                    ${d.pending_expenses.length ? `
+                    <table class="analytics-table">
+                        <thead><tr><th>Claim ID</th><th>Employee</th><th>Amount</th><th>Category</th><th>Status</th></tr></thead>
+                        <tbody>
+                            ${d.pending_expenses.map(e => `
+                                <tr>
+                                    <td>${esc(e.claim_id)}</td>
+                                    <td>${esc(e.employee)}</td>
+                                    <td class="analytics-num">INR ${fmt(e.amount, true)}</td>
+                                    <td>${esc(e.category)}</td>
+                                    <td><span class="meta-badge badge-${e.status === 'submitted' ? 'tech' : 'finance'}">${esc(e.status)}</span></td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>` : '<div class="analytics-empty">No pending expenses</div>'}
+                </div>
+
+                <!-- Pending Leaves -->
+                <div class="analytics-section">
+                    <h3 class="analytics-section-title">Pending Leave Requests</h3>
+                    ${d.pending_leaves.length ? `
+                    <table class="analytics-table">
+                        <thead><tr><th>Employee</th><th>Type</th><th>From</th><th>To</th><th>Days</th></tr></thead>
+                        <tbody>
+                            ${d.pending_leaves.map(l => `
+                                <tr>
+                                    <td>${esc(l.employee)}</td>
+                                    <td>${esc(l.type)}</td>
+                                    <td>${esc(l.start)}</td>
+                                    <td>${esc(l.end)}</td>
+                                    <td class="analytics-num">${l.days}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>` : '<div class="analytics-empty">No pending leave requests</div>'}
+                </div>
+
+                <!-- Room Utilization -->
+                <div class="analytics-section">
+                    <h3 class="analytics-section-title">Room Utilization (Last 7 Days)</h3>
+                    <div class="analytics-bars">
+                        ${d.room_utilization.map(r => `
+                            <div class="analytics-bar-row">
+                                <span class="analytics-bar-label">${esc(r.room)}</span>
+                                <div class="analytics-bar-track">
+                                    <div class="analytics-bar-fill analytics-bar-facilities" style="width:${maxRoom ? Math.max(r.bookings / maxRoom * 100, 2) : 2}%"></div>
+                                </div>
+                                <span class="analytics-bar-value">${r.bookings}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        function statCard(label, value, color) {
+            return `<div class="analytics-card">
+                <div class="analytics-card-value" style="color:${color}">${value}</div>
+                <div class="analytics-card-label">${label}</div>
+            </div>`;
+        }
+
+        function fmt(n, decimal) {
+            if (n == null) return '0';
+            return decimal ? Number(n).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})
+                           : Number(n).toLocaleString('en-IN');
+        }
+
+        function esc(t) {
+            const d = document.createElement('div');
+            d.textContent = t;
+            return d.innerHTML;
+        }
+
+        loadDashboard();
+    </script>
+</body>
+</html>
