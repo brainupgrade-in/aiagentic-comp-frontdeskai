@@ -208,6 +208,8 @@ SUPERVISOR_PROMPT = ChatPromptTemplate.from_messages([
         "- 'Send an email to rajesh about his leave approval' → skill_admin, confidence 9\n"
         "- 'Show SMTP configuration' → skill_admin, confidence 8\n"
         "- 'Set up email notifications' → skill_admin, confidence 9\n"
+        "- 'Set the API key for the weather skill' → skill_admin, confidence 9\n"
+        "- 'Show config for the weather skill' → skill_admin, confidence 9\n"
         "- 'Hello, how are you?' → general, confidence 7\n"
         "- 'something something' → general, confidence 3\n\n"
         "Use the conversation history (if any) to understand context. "
@@ -390,7 +392,15 @@ WORKER_CONFIGS = {
             "- Use send_email to send an email to a recipient with a subject and body.\n"
             "- NEVER expose the SMTP password in your response — it is stored encrypted.\n"
             "- If the user asks to 'set up email' or 'configure email', use configure_smtp.\n"
-            "- If the user asks to 'send an email', use send_email."
+            "- If the user asks to 'send an email', use send_email.\n\n"
+            "SKILL CONFIGURATION:\n"
+            "- Use get_skill_config to show all config values for a skill (e.g. API keys, base URLs).\n"
+            "- Use set_skill_config to set a config value. Use is_secret=True for API keys and tokens.\n"
+            "- Skills read config at runtime via `from skills import skill_config` — they call `skill_config('skill_name', 'key')`.\n"
+            "- When writing skill code, declare needed config in SKILL_META: config_keys=['api_key', 'base_url']\n"
+            "- In skill code, use `skill_config()` to read config values. Return a helpful message if config is missing.\n"
+            "- NEVER hardcode API keys or secrets in skill code — always use skill_config().\n"
+            "- After installing a skill that declares config_keys, tell the admin what config values need to be set."
         ),
         "can_escalate": False,
     },

@@ -21,6 +21,31 @@ SKILLS_DIR = os.path.join(os.path.dirname(_SQLITE_DIR), ".frontdeskai", "skills"
 # Registry: {name: {"meta": {...}, "tools": [tool1, tool2, ...]}}
 _loaded_skills: dict = {}
 
+# Validation pattern for skill config keys
+import re
+_CONFIG_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def skill_config(skill_name: str, key: str) -> str | None:
+    """Read a skill config value. Skills import this to get their config at runtime.
+
+    Tries encrypted key first (skill.{name}.{key}_enc), falls back to plain
+    (skill.{name}.{key}). Returns None if not found or decryption fails.
+    """
+    from tools import _get_system_config, _decrypt_value
+
+    # Try encrypted version first
+    enc_val = _get_system_config(f"skill.{skill_name}.{key}_enc")
+    if enc_val:
+        try:
+            return _decrypt_value(enc_val)
+        except Exception:
+            return None  # SECRET_KEY rotated — skill should handle gracefully
+
+    # Fall back to plain value
+    plain_val = _get_system_config(f"skill.{skill_name}.{key}")
+    return plain_val if plain_val else None
+
 
 # ========== HTML Text Extractor ==========
 
@@ -107,6 +132,106 @@ def fetch_webpage(url: str) -> str:
         return f"Failed to fetch {url}: {e}"
 
 
+# ========== Skill Configuration Tools ==========
+
+@tool
+def set_skill_config(skill_name: str, key: str, value: str, is_secret: bool = False) -> str:
+    """Set a configuration value for an installed skill. Admin only.
+    skill_name: lowercase skill identifier (e.g. 'weather').
+    key: config key name (lowercase, e.g. 'api_key', 'base_url').
+    value: the config value to store.
+    is_secret: if true, the value is encrypted at rest (use for API keys, tokens)."""
+    from auth import current_user_email
+    from tools import _set_system_config, _encrypt_value
+
+    try:
+        email = current_user_email.get()
+    except LookupError:
+        email = "unknown"
+
+    # Validate skill_name
+    if not skill_name.isidentifier() or not skill_name.islower():
+        return f"Invalid skill name '{skill_name}'. Must be a lowercase Python identifier."
+
+    # Validate key
+    if not _CONFIG_KEY_RE.match(key):
+        return f"Invalid config key '{key}'. Must match pattern: lowercase letter followed by lowercase letters, digits, or underscores."
+
+    if not value:
+        return "Config value cannot be empty."
+
+    if is_secret:
+        encrypted = _encrypt_value(value)
+        _set_system_config(f"skill.{skill_name}.{key}_enc", encrypted, email)
+        return f"Skill config set: {skill_name}.{key} = *** (encrypted)"
+    else:
+        _set_system_config(f"skill.{skill_name}.{key}", value, email)
+        return f"Skill config set: {skill_name}.{key} = {value}"
+
+
+@tool
+def get_skill_config(skill_name: str) -> str:
+    """Show all configuration values for a skill. Encrypted values are masked.
+    Also shows declared config_keys from SKILL_META with MISSING status if not set."""
+    from tools import _get_db
+
+    # Validate skill_name
+    if not skill_name.isidentifier() or not skill_name.islower():
+        return f"Invalid skill name '{skill_name}'. Must be a lowercase Python identifier."
+
+    # Query all config keys for this skill
+    prefix = f"skill.{skill_name}."
+    conn = _get_db()
+    try:
+        rows = conn.execute(
+            "SELECT key, value FROM system_config WHERE key LIKE ?",
+            (f"{prefix}%",),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    # Build a map of configured keys
+    configured = {}
+    for row in rows:
+        raw_key = row["key"][len(prefix):]  # strip prefix
+        if raw_key.endswith("_enc"):
+            display_key = raw_key[:-4]  # remove _enc suffix
+            configured[display_key] = "*** (encrypted)"
+        else:
+            configured[raw_key] = row["value"]
+
+    # Check SKILL_META for declared config_keys
+    skill_info = _loaded_skills.get(skill_name)
+    declared_keys = []
+    if skill_info:
+        declared_keys = skill_info["meta"].get("config_keys", [])
+
+    lines = [f"Configuration for skill '{skill_name}':"]
+
+    if not configured and not declared_keys:
+        lines.append("  No configuration found or declared.")
+        return "\n".join(lines)
+
+    # Show declared keys with status
+    if declared_keys:
+        lines.append("  Declared config_keys:")
+        for dk in declared_keys:
+            if dk in configured:
+                lines.append(f"    {dk}: {configured[dk]}")
+            else:
+                lines.append(f"    {dk}: MISSING — use set_skill_config to configure")
+
+    # Show any extra configured keys not in declared list
+    extra = {k: v for k, v in configured.items() if k not in declared_keys}
+    if extra:
+        if declared_keys:
+            lines.append("  Additional config:")
+        for k, v in sorted(extra.items()):
+            lines.append(f"    {k}: {v}")
+
+    return "\n".join(lines)
+
+
 # ========== Skill Management Tools ==========
 
 @tool
@@ -141,7 +266,7 @@ def install_skill(skill_name: str, description: str, python_code: str) -> str:
                     has_tool = True
 
     if not has_meta:
-        return "Skill code must define a SKILL_META dict (e.g. SKILL_META = {'name': '...', 'description': '...', 'categories': ['facilities']})."
+        return "Skill code must define a SKILL_META dict (e.g. SKILL_META = {'name': '...', 'description': '...', 'categories': ['facilities'], 'config_keys': ['api_key']})."
     if not has_tool:
         return "Skill code must define at least one function decorated with @tool."
 
@@ -183,11 +308,15 @@ def list_skills() -> str:
     for name, info in sorted(_loaded_skills.items()):
         meta = info["meta"]
         tool_names = [t.name for t in info["tools"]]
-        lines.append(
+        entry = (
             f"  {name}: {meta.get('description', 'No description')}\n"
             f"    Categories: {', '.join(meta.get('categories', []))}\n"
             f"    Tools: {', '.join(tool_names)}"
         )
+        config_keys = meta.get("config_keys", [])
+        if config_keys:
+            entry += f"\n    Config keys: {', '.join(config_keys)}"
+        lines.append(entry)
     return "\n".join(lines)
 
 
@@ -263,4 +392,4 @@ def get_skill_tools(category: str) -> list:
 
 # ========== Exported Tool Lists ==========
 
-SKILL_ADMIN_TOOLS = [search_web, fetch_webpage, install_skill, list_skills]
+SKILL_ADMIN_TOOLS = [search_web, fetch_webpage, install_skill, list_skills, set_skill_config, get_skill_config]

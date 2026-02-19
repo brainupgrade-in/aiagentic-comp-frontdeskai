@@ -1,6 +1,6 @@
-# FrontDesk AI — Multi-Agent Support System
+# FrontDesk AI — Self-Evolving Agentic AI Support System
 
-Agentic AI employee support desk powered by LangGraph multi-agent orchestration.
+A truly agentic AI employee support desk that teaches itself new capabilities through conversation. Powered by LangGraph multi-agent orchestration with a zero-rebuild architecture — admins install skills, configure APIs, switch LLM providers, and send emails entirely via chat. Skills are researched, code-generated, validated, persisted, and executed at runtime. Everything survives restarts with no redeployment.
 
 ## Architecture
 
@@ -19,14 +19,20 @@ User Request → Supervisor (LLM classifier)
 
 **Agents:** Supervisor, HR Worker, Tech Worker, Finance Worker, Facilities Worker, Analytics Worker, Account Worker, Skill Admin Worker, General Worker, Clarify Agent, Manager, QA Gate, Fallback
 
-**Features:**
+**What makes it agentic:**
+- **Self-teaching** — admins describe a capability in plain English; the system researches APIs, writes Python code, validates it, installs it, and makes it available to employees — all in one conversation
+- **Zero-rebuild** — skills (code on disk), configuration (DB), LLM provider, SMTP settings all persist across restarts without redeployment
+- **Runtime extensibility** — new tools are injected into domain workers on the fly; the system grows its own capabilities without touching core code
+- **End-to-end agentic loop** — Research (web search) → Code generation → AST validation → Install to filesystem → Configure (API keys in DB, encrypted) → Execute via domain workers
+
+**Core features:**
 - Multi-agent routing with structured LLM classification
 - RAG-powered policy document retrieval (ChromaDB with ONNX embeddings — no torch/CUDA required)
 - ReAct tool-calling loop (up to 3 iterations per worker)
 - QA gate with PII detection/redaction and self-correction retry
 - Per-user password storage (PBKDF2-HMAC-SHA256, 600k iterations)
 - Chat-based password change via the Account agent
-- Dynamic skill installation — admins can teach the system new capabilities via chat (web research → code generation → install → immediate availability)
+- Dynamic skill installation with per-skill configuration (API keys, secrets encrypted at rest)
 - Admin-configurable LLM model & provider (Groq/OpenRouter) via chat — persists across restarts
 - Admin-configurable SMTP email — configure and send emails via chat (encrypted password storage)
 - Admin analytics dashboard with visual UI and chat-based tools
@@ -142,35 +148,85 @@ FrontDesk AI uses per-user password storage with PBKDF2-HMAC-SHA256 hashing (600
 2. **Subsequent logins:** Password is verified against the stored per-user hash (shared password no longer works for that user)
 3. **Password change:** Users can change their password via the chat interface by saying "I want to change my password" — the Account agent handles this securely using a `ContextVar` to pass the authenticated identity (the LLM cannot influence which user's password is changed)
 
-## Dynamic Skills
+## Dynamic Skills — The Self-Teaching Engine
 
-Admins can teach FrontDesk AI new capabilities at runtime — no restart required.
+FrontDesk AI teaches itself new capabilities through conversation. The admin describes what they want, and the system researches, writes code, installs it, configures it, and executes it — all at runtime, zero rebuild required.
 
-**How it works:**
-1. Admin says: *"Install a weather lookup skill"*
-2. Supervisor routes to `skill_admin` worker (non-admins are denied)
-3. The worker uses `search_web` and `fetch_webpage` to research APIs
-4. It generates a Python skill file with `SKILL_META` and `@tool` functions
-5. `install_skill` validates the code (AST parse, checks for required structure), saves to `/shared/.frontdeskai/skills/`, and loads it immediately
-6. The skill's tools become available to domain workers matching the skill's `categories`
+### The Full Agentic Loop
 
-**Skill file format:**
+```
+Admin: "Install a weather lookup skill"
+  │
+  ▼
+1. RESEARCH    — skill_admin agent searches the web for weather APIs
+  │               (search_web → fetch_webpage → reads API docs)
+  ▼
+2. WRITE CODE  — LLM generates a complete Python skill file
+  │               (SKILL_META + config_keys + @tool functions + skill_config() reads)
+  ▼
+3. VALIDATE    — AST parse, check SKILL_META, check @tool decorators
+  ▼
+4. PERSIST     — Save to /shared/.frontdeskai/skills/weather.py (survives restarts)
+  ▼
+5. LOAD        — Import into running process, register tools immediately
+  │
+  ▼
+Admin: "Set the API key for weather skill to sk-..."
+  │
+  ▼
+6. CONFIGURE   — Store encrypted in system_config DB table (survives restarts)
+  │
+  ▼
+Employee: "What's the weather in Mumbai?"
+  │
+  ▼
+7. EXECUTE     — Facilities worker gets weather tool injected, reads config, calls API, responds
+```
+
+**What persists without rebuild:**
+| What | Where | Survives restart |
+|------|-------|-----------------|
+| Skill code | Filesystem (`/shared/.frontdeskai/skills/*.py`) | Auto-loaded at startup |
+| Skill config (API keys, URLs) | SQLite `system_config` table | Available immediately |
+| Secrets (API keys, tokens) | SQLite `system_config` (Fernet encrypted) | Decrypted at runtime |
+| LLM model/provider | SQLite `system_config` table | Loaded on import |
+| SMTP settings | SQLite `system_config` table | Available immediately |
+
+### Skill File Format
+
+Skills are standalone Python files with a standard structure:
+
 ```python
-SKILL_META = {"name": "weather", "description": "Weather lookup", "categories": ["facilities"]}
 from langchain_core.tools import tool
+from skills import skill_config
+
+SKILL_META = {
+    "name": "weather",
+    "description": "Weather lookup using WeatherAPI",
+    "categories": ["facilities"],       # which domain workers get this tool
+    "config_keys": ["api_key"],          # declares what config is needed
+}
 
 @tool
 def get_weather(city: str) -> str:
     """Get current weather for a city."""
     import urllib.request, json
-    resp = urllib.request.urlopen(f"https://wttr.in/{city}?format=j1")
+    api_key = skill_config("weather", "api_key")
+    if not api_key:
+        return "Weather skill not configured. Ask an admin to: set weather skill api_key"
+    resp = urllib.request.urlopen(f"https://api.weatherapi.com/v1/current.json?key={api_key}&q={city}")
     data = json.loads(resp.read())
-    return f"{city}: {data['current_condition'][0]['temp_C']}°C"
+    return f"{city}: {data['current']['temp_c']}°C, {data['current']['condition']['text']}"
 ```
 
-**Admin commands via chat:**
-- *"Install a skill to check weather forecasts"* — researches, generates, and installs
-- *"List installed skills"* — shows all loaded skills with their tools and categories
+### Admin Commands via Chat
+
+| Command | What happens |
+|---------|-------------|
+| *"Install a skill to check weather"* | Researches APIs, generates code, validates, installs, loads |
+| *"List installed skills"* | Shows all skills with tools, categories, and config keys |
+| *"Set the API key for weather skill"* | Stores encrypted in DB via `set_skill_config` |
+| *"Show config for weather skill"* | Shows configured vs MISSING keys via `get_skill_config` |
 
 ## LLM Configuration
 
@@ -208,7 +264,7 @@ Admins can configure SMTP email settings and send emails via chat — no restart
 | Database | Location | Purpose |
 |----------|----------|---------|
 | `history.db` | `$SQLITE_DIR/history.db` | Chat message history + `users` table (per-user password hashes) |
-| `frontdesk_tools.db` | `$SQLITE_DIR/frontdesk_tools.db` | Business data: employees, leave, tickets, expenses, rooms, payslips + system_config (LLM settings) |
+| `frontdesk_tools.db` | `$SQLITE_DIR/frontdesk_tools.db` | Business data: employees, leave, tickets, expenses, rooms, payslips + system_config (LLM + SMTP + skill config) |
 | `checkpoints.db` | `$SQLITE_DIR/checkpoints.db` | LangGraph checkpointer state |
 | `chroma/` | `$SQLITE_DIR/chroma/` | ChromaDB vector store for RAG |
 | `skills/` | `/shared/.frontdeskai/skills/` | Dynamic skill Python files (loaded at startup) |
@@ -266,7 +322,7 @@ rate(frontdeskai_agent_errors_total[5m])
 - Prompt injection guardrails: delimiter-wrapped user input, PII detection/redaction
 - Admin access gated by `ADMIN_EMAILS` env var
 - ContextVar-based identity for tool calls (server-set, LLM cannot influence)
-- SMTP password encrypted at rest with Fernet (AES-128-CBC + HMAC-SHA256, key derived from SECRET_KEY)
+- SMTP password and secret skill config values encrypted at rest with Fernet (AES-128-CBC + HMAC-SHA256, key derived from SECRET_KEY)
 
 ## Access
 

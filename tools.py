@@ -1173,6 +1173,16 @@ def _decrypt_smtp_password(ciphertext: str) -> str:
     return _get_fernet().decrypt(ciphertext.encode()).decode()
 
 
+def _encrypt_value(plaintext: str) -> str:
+    """Encrypt any string with Fernet for storing secrets in system_config."""
+    return _get_fernet().encrypt(plaintext.encode()).decode()
+
+
+def _decrypt_value(ciphertext: str) -> str:
+    """Decrypt a Fernet-encrypted value from system_config."""
+    return _get_fernet().decrypt(ciphertext.encode()).decode()
+
+
 @tool
 def get_llm_config() -> str:
     """Get the current LLM configuration (model, provider, temperature, API key status)."""
