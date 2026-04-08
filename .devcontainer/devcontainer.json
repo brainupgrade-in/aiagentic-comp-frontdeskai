@@ -2,6 +2,14 @@
   "name": "FrontDesk AI",
   "image": "mcr.microsoft.com/devcontainers/python:3.12-bullseye",
 
+  // Minimum 4-core / 8GB RAM recommended: kind control plane (~500MB)
+  // + Docker daemon (~200MB) + FrontDesk AI with ONNX/ChromaDB (~1GB) = ~2GB+
+  "hostRequirements": {
+    "cpus": 4,
+    "memory": "8gb",
+    "storage": "32gb"
+  },
+
   "features": {
     // Docker-in-Docker so kind can spawn cluster nodes as containers
     "ghcr.io/devcontainers/features/docker-in-docker:2": {
