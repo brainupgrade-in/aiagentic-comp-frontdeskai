@@ -600,7 +600,7 @@ def get_ticket_status(ticket_id: str) -> str:
         row = conn.execute(
             "SELECT t.*, e.full_name AS creator_name, a.full_name AS assignee_name "
             "FROM tickets t "
-            "JOIN employees e ON t.created_by = e.employee_id "
+            "LEFT JOIN employees e ON t.created_by = e.employee_id "
             "LEFT JOIN employees a ON t.assignee = a.employee_id "
             "WHERE t.ticket_id = ?",
             (ticket_id.upper(),),
@@ -614,7 +614,7 @@ def get_ticket_status(ticket_id: str) -> str:
             f"  Priority:   {row['priority']} (SLA: {row['sla_hours']}h)",
             f"  Status:     {row['status']}",
             f"  Category:   {row['category']}",
-            f"  Created by: {row['creator_name']}",
+            f"  Created by: {row['creator_name'] or 'System'}",
             f"  Assignee:   {row['assignee_name'] or 'Unassigned'}",
             f"  Created:    {row['created_at']}",
         ]
