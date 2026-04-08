@@ -93,6 +93,8 @@ The agentic loop: skill code → filesystem, skill config → DB, LLM/SMTP confi
 ```bash
 # Run locally
 python app/app.py
+# Access: http://localhost:8000 (local) or http://localhost:8000 (kind NodePort — no port-forward)
+# Grafana: http://localhost:3000 | Prometheus: http://localhost:9090
 
 # Verify auth module
 cd app && python -c "from auth import hash_password, verify_password; h,s = hash_password('test'); print(verify_password('test',h,s))"
@@ -160,7 +162,7 @@ The full agentic cycle for adding a new capability, entirely via chat:
 | `scripts/install-observability.sh` | Install Prometheus, Grafana, Loki, Promtail, Tempo via Helm into `monitoring` namespace |
 | `scripts/generate-test-traffic.sh` | Generate load to populate observability dashboards |
 | `scripts/manifests/deployment.yaml` | App deployment (image: `frontdeskai:latest`, imagePullPolicy: Never for kind) |
-| `scripts/manifests/service.yaml` | ClusterIP service — ports: http(80→8000), metrics(9090→8000) |
+| `scripts/manifests/service.yaml` | NodePort service — http(80→30800), metrics(9090→30900) |
 | `scripts/manifests/secret.yaml` | Secret template for API keys |
 | `scripts/manifests/servicemonitor.yaml` | ServiceMonitor for Prometheus Operator |
 | `scripts/observability/tempo.yaml` | Tempo Helm values — OTLP gRPC (4317) + HTTP (4318) receivers |

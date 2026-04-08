@@ -39,11 +39,9 @@ Builds the container image, loads it into the kind cluster, creates the Kubernet
 
 ### 4. Access the App
 
-```bash
-kubectl port-forward svc/frontdeskai 8000:80 &
-```
+The kind cluster is created with `extraPortMappings` and the service uses NodePort — no `kubectl port-forward` needed.
 
-Open the **Ports** tab in VS Code and click the forwarded port 8000, or open:
+Open directly in your browser:
 ```
 http://localhost:8000
 ```
@@ -59,9 +57,9 @@ bash scripts/install-observability.sh
 
 Installs Prometheus, Grafana, Loki, Promtail, and Tempo with full 3-way correlation (metrics ↔ logs ↔ traces).
 
-```bash
-kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80 &
-# Open http://localhost:3000  (admin / admin)
+Access Grafana directly (NodePort — no port-forward needed):
+```
+http://localhost:3000  (admin / admin)
 ```
 
 ---
@@ -94,14 +92,28 @@ python app/app.py
 # Install kind (if not installed)
 curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64 && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind
 
-# Create kind cluster
-kind create cluster --name frontdeskai
+# Create kind cluster with NodePort mappings
+cat <<'EOF' | kind create cluster --name frontdeskai --config=-
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30800
+        hostPort: 8000
+        protocol: TCP
+      - containerPort: 30300
+        hostPort: 3000
+        protocol: TCP
+      - containerPort: 30900
+        hostPort: 9090
+        protocol: TCP
+EOF
 
 # Deploy app
 bash scripts/deploy.sh
 
-# Access
-kubectl port-forward svc/frontdeskai 8000:80 &
+# Access: http://localhost:8000  (NodePort — no port-forward needed)
 ```
 
 ---
@@ -138,16 +150,23 @@ kubectl logs deployment/frontdeskai
 kubectl get secret frontdeskai-secret -o jsonpath='{.data.GROQ_API_KEY}' | base64 -d
 ```
 
-**Port-forward drops after a while:**
-```bash
-kubectl port-forward svc/frontdeskai 8000:80 &
-```
-
 **kind cluster not found:**
 ```bash
 kind get clusters
-# Recreate if missing
-kind create cluster --name frontdeskai
+# Recreate if missing (with NodePort mappings — required for localhost access)
+cat <<'EOF' | kind create cluster --name frontdeskai --config=-
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30800
+        hostPort: 8000
+      - containerPort: 30300
+        hostPort: 3000
+      - containerPort: 30900
+        hostPort: 9090
+EOF
 bash scripts/deploy.sh
 ```
 

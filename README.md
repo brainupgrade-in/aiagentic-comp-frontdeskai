@@ -57,8 +57,7 @@ The devcontainer auto-installs Python, kubectl, helm, kind, and spins up a local
 ```bash
 cp .env.example .env          # set GROQ_API_KEY
 bash scripts/deploy.sh        # build + deploy to kind
-kubectl port-forward svc/frontdeskai 8000:80 &
-# Open http://localhost:8000
+# Open http://localhost:8000  (NodePort — no port-forward needed)
 ```
 
 ### Option B — Local Machine
@@ -82,8 +81,7 @@ See [user-manual.md](user-manual.md) for end-user and admin usage instructions.
 
 ```bash
 bash scripts/install-observability.sh
-kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80 &
-# Open http://localhost:3000  (admin / admin)
+# Open http://localhost:3000  (admin / admin) — NodePort, no port-forward needed
 ```
 
 Metrics, logs, and traces are fully correlated in Grafana — click a trace ID in a log line to jump to the trace, or click a metric exemplar to see the originating trace.
@@ -109,7 +107,7 @@ kubectl logs deployment/frontdeskai
 | `scripts/install-observability.sh` | Install Prometheus, Grafana, Loki, Promtail, Tempo via Helm |
 | `scripts/generate-test-traffic.sh` | Generate load to populate observability dashboards |
 | `scripts/manifests/deployment.yaml` | App deployment + 1Gi PVC + Prometheus scrape annotations |
-| `scripts/manifests/service.yaml` | ClusterIP service with http (80) and metrics (9090) ports |
+| `scripts/manifests/service.yaml` | NodePort service — http (80→30800), metrics (9090→30900) |
 | `scripts/manifests/secret.yaml` | Secret template for API keys |
 | `scripts/manifests/servicemonitor.yaml` | ServiceMonitor for Prometheus Operator |
 | `scripts/observability/` | Helm values for the full observability stack |
@@ -343,16 +341,11 @@ rate(frontdeskai_agent_errors_total[5m])
 
 ## Access
 
-```bash
-# App
-kubectl port-forward svc/frontdeskai 8000:80 &
-# http://localhost:8000
+No `kubectl port-forward` needed — the kind cluster is created with `extraPortMappings`
+and all services use NodePort, so ports bind directly to `localhost` in the Codespace.
 
-# Grafana (after install-observability.sh)
-kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80 &
-# http://localhost:3000  (admin / admin)
-
-# Prometheus
-kubectl port-forward -n monitoring svc/kube-prometheus-stack-prometheus 9090:9090 &
-# http://localhost:9090
-```
+| Service | URL | NodePort |
+|---------|-----|----------|
+| FrontDesk AI | http://localhost:8000 | 30800 |
+| Grafana | http://localhost:3000 (admin / admin) | 30300 |
+| Prometheus | http://localhost:9090 | 30900 |
