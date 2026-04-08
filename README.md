@@ -46,36 +46,45 @@ User Request → Supervisor (LLM classifier)
 
 **Login:** Any email + shared password (default `brainupgrade`). On first login, the password is hashed and stored per-user. Subsequent logins use the stored hash.
 
-## Quick Start (Local)
+## Quick Start
+
+### Option A — GitHub Codespace (Recommended)
+
+Open the repo on GitHub → **Code → Codespaces → Create codespace on main**
+
+The devcontainer auto-installs Python, kubectl, helm, kind, and spins up a local Kubernetes cluster. When ready:
 
 ```bash
-# Setup
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r app/requirements.txt
-
-# Configure
-cp .env.example .env
-# Edit .env and set GROQ_API_KEY
-
-# Run
-python app/app.py
+cp .env.example .env          # set GROQ_API_KEY
+bash scripts/deploy.sh        # build + deploy to kind
+kubectl port-forward svc/frontdeskai 8000:80 &
 # Open http://localhost:8000
 ```
 
-## Build & Deploy on kind (Codespace / Local)
+### Option B — Local Machine
 
 ```bash
 git clone https://github.com/brainupgrade-in/aiagentic-comp-frontdeskai.git
 cd aiagentic-comp-frontdeskai
 
-# Deploy app to kind cluster
-bash scripts/deploy.sh
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r app/requirements.txt
 
-# Install full observability stack (Prometheus, Grafana, Loki, Promtail, Tempo)
-bash scripts/install-observability.sh
+cp .env.example .env          # set GROQ_API_KEY
+python app/app.py             # Open http://localhost:8000
 ```
 
-See [participant-instructions.md](participant-instructions.md) for the full guide.
+See [participant-instructions.md](participant-instructions.md) for the full deployment guide including kind cluster setup and observability stack.
+
+### Observability Stack (Prometheus · Grafana · Loki · Promtail · Tempo)
+
+```bash
+bash scripts/install-observability.sh
+kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80 &
+# Open http://localhost:3000  (admin / admin)
+```
+
+Metrics, logs, and traces are fully correlated in Grafana — click a trace ID in a log line to jump to the trace, or click a metric exemplar to see the originating trace.
 
 ### Redeploy After Code Changes
 
@@ -333,5 +342,16 @@ rate(frontdeskai_agent_errors_total[5m])
 
 ## Access
 
-- **Local:** http://localhost:8000
-- **Sandbox:** https://YOURNAMESPACE-app.brainupgrade.in
+```bash
+# App
+kubectl port-forward svc/frontdeskai 8000:80 &
+# http://localhost:8000
+
+# Grafana (after install-observability.sh)
+kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80 &
+# http://localhost:3000  (admin / admin)
+
+# Prometheus
+kubectl port-forward -n monitoring svc/kube-prometheus-stack-prometheus 9090:9090 &
+# http://localhost:9090
+```
