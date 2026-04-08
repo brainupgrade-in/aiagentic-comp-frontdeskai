@@ -113,6 +113,12 @@ bash scripts/deploy.sh       # deploy manifests, auto-detects kind vs production
 # Redeploy after code changes (kind)
 bash scripts/build.sh && kubectl rollout restart deployment/frontdeskai
 
+# Update a secret/config without rebuilding the image
+kubectl patch secret frontdeskai-secret \
+  --type=merge \
+  -p '{"stringData":{"GROQ_API_KEY":"<new-key>"}}'
+kubectl rollout restart deployment/frontdeskai
+
 # Check pod status and logs
 kubectl get pods -l app=frontdeskai
 kubectl logs deployment/frontdeskai
@@ -130,6 +136,10 @@ kubectl logs deployment/frontdeskai
 | `SQLITE_DIR` | No | `/shared/.sqlite` |
 
 Note: All runtime configuration is managed through chat (stored in `system_config` table, persists across restarts with zero rebuild): LLM model/provider/API key, SMTP email settings, and per-skill configuration (API keys, base URLs, etc.). SMTP password and secret skill config values are encrypted with Fernet (derived from `SECRET_KEY`).
+
+**Updating API keys — two options (no image rebuild required):**
+1. **Zero-downtime via admin chat** — login as admin and say `update groq api key to <key>`; the `skill_admin` worker saves it to DB and hot-reloads immediately.
+2. **K8s secret patch + restart** — `kubectl patch secret frontdeskai-secret --type=merge -p '{"stringData":{"GROQ_API_KEY":"<key>"}}'` then `kubectl rollout restart deployment/frontdeskai`.
 
 ## Agentic Loop (Self-Teaching)
 

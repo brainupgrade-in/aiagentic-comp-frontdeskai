@@ -15,7 +15,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import SystemMessage, AIMessage, ToolMessage
 from langgraph.graph import StateGraph, START, END
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 from observability import trace_llm_call
 from rag import retrieve, format_context, format_sources
@@ -81,8 +81,8 @@ def get_llm():
             _llm_cache[cache_key] = ChatOpenAI(
                 model=cfg["model"],
                 temperature=cfg["temperature"],
-                openai_api_key=api_key,
-                openai_api_base="https://openrouter.ai/api/v1",
+                api_key=SecretStr(api_key) if api_key else None,
+                base_url="https://openrouter.ai/api/v1",
             )
         else:
             kwargs = {"model": cfg["model"], "temperature": cfg["temperature"]}
@@ -204,6 +204,9 @@ SUPERVISOR_PROMPT = ChatPromptTemplate.from_messages([
         "- 'What model are we using?' → skill_admin, confidence 8\n"
         "- 'Switch to OpenRouter with google/gemini-2.0-flash-001' → skill_admin, confidence 9\n"
         "- 'Update the API key' → skill_admin, confidence 9\n"
+        "- 'Update groq api key to gsk_abc123...' → skill_admin, confidence 9\n"
+        "- 'Change the groq api key to sk-...' → skill_admin, confidence 9\n"
+        "- 'Set GROQ_API_KEY to gsk_...' → skill_admin, confidence 9\n"
         "- 'Configure SMTP with AWS SES' → skill_admin, confidence 9\n"
         "- 'Send an email to rajesh about his leave approval' → skill_admin, confidence 9\n"
         "- 'Show SMTP configuration' → skill_admin, confidence 8\n"
