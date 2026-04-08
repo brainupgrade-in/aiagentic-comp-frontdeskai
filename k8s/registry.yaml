@@ -1,3 +1,8 @@
+# NOTE: This registry is for production k3s sandbox (brainupgrade.in) only.
+# For kind (local/Codespace), images are loaded directly via:
+#   kind load docker-image frontdeskai:latest --name frontdeskai
+# deploy.sh skips this file automatically when a kind context is detected.
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:

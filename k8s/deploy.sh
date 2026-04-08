@@ -67,9 +67,9 @@ apply_manifests() {
   echo "==> Applying manifests (image=${image}, pullPolicy=${pull_policy})..."
   DEPLOY_TMP=$(mktemp)
   trap 'rm -f "${DEPLOY_TMP}"' EXIT
-  sed "s|YOURNAMESPACE-registry.brainupgrade.in/frontdeskai:latest|${image}|g" \
+  sed "s|image: frontdeskai:latest|image: ${image}|g" \
       "${REPO_DIR}/k8s/deployment.yaml" \
-    | sed "s|imagePullPolicy: Always|imagePullPolicy: ${pull_policy}|g" \
+    | sed "s|imagePullPolicy: Never|imagePullPolicy: ${pull_policy}|g" \
     > "${DEPLOY_TMP}"
   kubectl apply -f "${DEPLOY_TMP}"
   kubectl apply -f "${REPO_DIR}/k8s/service.yaml"

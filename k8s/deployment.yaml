@@ -24,8 +24,10 @@ spec:
         fsGroup: 1000
       containers:
         - name: frontdeskai
-          image: YOURNAMESPACE-registry.brainupgrade.in/frontdeskai:latest
-          imagePullPolicy: Always
+          # kind (local/Codespace): frontdeskai:latest loaded via `kind load docker-image`
+          # production: substituted by deploy.sh to ${NAMESPACE}-registry.brainupgrade.in/frontdeskai:latest
+          image: frontdeskai:latest
+          imagePullPolicy: Never
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: false
