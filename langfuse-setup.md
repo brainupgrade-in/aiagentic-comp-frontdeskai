@@ -23,7 +23,7 @@ Both systems run in parallel. OpenTelemetry captures infrastructure-level spans 
 Langfuse integrates via the `LangfuseCallbackHandler` — a LangChain-compatible callback that intercepts every LLM invocation in the LangGraph agent chain.
 
 ```
-User Request → app.py
+User Request → app/app.py
   │
   ├── Creates LangfuseCallbackHandler (per request)
   │     user_id = email, session_id = email
@@ -46,7 +46,7 @@ Each `llm.invoke()` call through `ChatGroq` triggers the callback, which sends:
 
 ### Code Flow
 
-**`observability.py`** — Initialization and handler factory:
+**`app/observability.py`** — Initialization and handler factory:
 
 ```python
 from langfuse.callback import CallbackHandler as LangfuseCallbackHandler
@@ -72,7 +72,7 @@ def get_langfuse_handler(user_id="", session_id=""):
     )
 ```
 
-**`app.py`** — Per-request callback attachment:
+**`app/app.py`** — Per-request callback attachment:
 
 ```python
 from observability import get_langfuse_handler
@@ -126,7 +126,7 @@ LANGFUSE_HOST=https://cloud.langfuse.com
 The `deploy.sh` script reads `.env` and creates a K8s secret with all keys:
 
 ```bash
-bash k8s/deploy.sh
+bash scripts/deploy.sh
 ```
 
 The deployment manifest mounts Langfuse env vars from the secret with `optional: true`, so the app starts even if Langfuse keys are absent:
@@ -266,7 +266,7 @@ Both systems capture observability data, but serve different purposes:
 ## Dependencies
 
 ```
-# requirements.txt
+# app/requirements.txt
 langchain>=0.3.0
 langfuse==2.51.3
 ```

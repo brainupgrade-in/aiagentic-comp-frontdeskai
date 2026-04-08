@@ -24,11 +24,11 @@ FrontDesk AI (FastAPI)
 Each chat request creates a parent span with child spans for each LLM agent call:
 
 ```
-chat.send (parent)                    ← app.py
-├── llm.supervisor                    ← agents.py (classification)
-├── llm.<worker>                      ← agents.py (hr/tech/finance/facilities/general)
+chat.send (parent)                    ← app/app.py
+├── llm.supervisor                    ← app/agents.py (classification)
+├── llm.<worker>                      ← app/agents.py (hr/tech/finance/facilities/general)
 │   (hr_worker, tech_worker, etc.)
-├── llm.manager                       ← agents.py (if escalated)
+├── llm.manager                       ← app/agents.py (if escalated)
 └── (all logs correlated via trace_id/span_id)
 ```
 
@@ -112,7 +112,7 @@ Logs are emitted as JSON to stdout with trace correlation fields:
 ## Dependencies
 
 ```
-# requirements.txt
+# app/requirements.txt
 opentelemetry-api==1.27.0
 opentelemetry-sdk==1.27.0
 opentelemetry-exporter-otlp-proto-grpc==1.27.0
@@ -130,7 +130,7 @@ prometheus-client==0.21.0
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://tempo.monitoring.svc.cluster.local:4317` | Tempo OTLP gRPC endpoint |
 | `LOG_LEVEL` | `INFO` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 
-All observability configuration is externalized via environment variables set in `k8s/deployment.yaml`. No observability endpoints or service names are hardcoded in the application code.
+All observability configuration is externalized via environment variables set in `scripts/manifests/deployment.yaml`. No observability endpoints or service names are hardcoded in the application code.
 
 ### Kubernetes Pod Annotations
 
@@ -161,9 +161,9 @@ kubectl patch deployment frontdeskai -n <NAMESPACE> --type=merge -p '{
 
 | File | Observability Role |
 |------|--------------------|
-| `observability.py` | Central module: TracerProvider, MeterProvider, JsonFormatter, `trace_llm_call` context manager |
-| `app.py` | Calls `init_observability()`, creates `chat.send` parent span, records request metrics, mounts `/metrics` |
-| `agents.py` | Each agent function uses `trace_llm_call("agent_name")` to create child spans |
+| `app/observability.py` | Central module: TracerProvider, MeterProvider, JsonFormatter, `trace_llm_call` context manager |
+| `app/app.py` | Calls `init_observability()`, creates `chat.send` parent span, records request metrics, mounts `/metrics` |
+| `app/agents.py` | Each agent function uses `trace_llm_call("agent_name")` to create child spans |
 
 ### Key Functions
 

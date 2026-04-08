@@ -51,35 +51,36 @@ User Request → Supervisor (LLM classifier)
 ```bash
 # Setup
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r app/requirements.txt
 
 # Configure
 cp .env.example .env
 # Edit .env and set GROQ_API_KEY
 
 # Run
-python app.py
+python app/app.py
 # Open http://localhost:8000
 ```
 
-## Build & Deploy on Kubernetes (Sandbox)
-
-This project is designed to run inside a Cloud Lab sandbox environment on an **AWS EKS** cluster. Each participant has their own namespace with a private in-cluster container registry — no external registry (Docker Hub, ECR) is needed.
+## Build & Deploy on kind (Codespace / Local)
 
 ```bash
 git clone https://github.com/brainupgrade-in/aiagentic-comp-frontdeskai.git
 cd aiagentic-comp-frontdeskai
-bash k8s/deploy.sh YOUR_GROQ_API_KEY
-```
 
-This single command auto-detects your namespace, deploys a private registry, builds and pushes the image, creates the secret, and deploys the app.
+# Deploy app to kind cluster
+bash scripts/deploy.sh
+
+# Install full observability stack (Prometheus, Grafana, Loki, Promtail, Tempo)
+bash scripts/install-observability.sh
+```
 
 See [participant-instructions.md](participant-instructions.md) for the full guide.
 
 ### Redeploy After Code Changes
 
 ```bash
-bash k8s/build-and-push.sh
+bash scripts/build.sh
 kubectl rollout restart deployment/frontdeskai
 ```
 
@@ -90,40 +91,46 @@ kubectl get pods -l app=frontdeskai
 kubectl logs deployment/frontdeskai
 ```
 
-## Kubernetes Manifests
+## Scripts & Manifests
 
 | File | Description |
 |------|-------------|
-| `k8s/registry.yaml` | In-namespace container registry + PVC (ingress pre-created by admin) |
-| `k8s/secret.yaml` | GROQ_API_KEY and SECRET_KEY |
-| `k8s/deployment.yaml` | App deployment + 1Gi PVC + Prometheus scrape annotations |
-| `k8s/service.yaml` | Service `app` with http (80) and metrics (9090) ports |
-| `k8s/servicemonitor.yaml` | ServiceMonitor for Prometheus Operator cross-namespace discovery |
-| `k8s/deploy.sh` | One-command deploy (registry + build + push + secret + app + ServiceMonitor) |
-| `k8s/build-and-push.sh` | Rebuild and push image after code changes |
+| `scripts/deploy.sh` | One-command deploy — auto-detects kind vs production sandbox |
+| `scripts/build.sh` | Build image and load into kind (or push to registry for production) |
+| `scripts/install-observability.sh` | Install Prometheus, Grafana, Loki, Promtail, Tempo via Helm |
+| `scripts/generate-test-traffic.sh` | Generate load to populate observability dashboards |
+| `scripts/manifests/deployment.yaml` | App deployment + 1Gi PVC + Prometheus scrape annotations |
+| `scripts/manifests/service.yaml` | ClusterIP service with http (80) and metrics (9090) ports |
+| `scripts/manifests/secret.yaml` | Secret template for API keys |
+| `scripts/manifests/servicemonitor.yaml` | ServiceMonitor for Prometheus Operator |
+| `scripts/observability/` | Helm values for the full observability stack |
 
 ## Project Structure
 
 ```
-├── app.py              # FastAPI application with auth, chat, KB management, analytics API
-├── agents.py           # LangGraph multi-agent graph (supervisor, workers, QA, escalation)
-├── auth.py             # Per-user password hashing (PBKDF2) and storage
-├── tools.py            # Domain tool definitions (HR, Tech, Finance, Facilities, Analytics, Account, SMTP)
-├── skills.py           # Dynamic skill registry — load, install, list skills + web research tools
-├── rag.py              # RAG pipeline — ChromaDB indexing and retrieval (ONNX embeddings, no torch)
-├── observability.py    # OpenTelemetry metrics, tracing, and JSON logging
-├── requirements.txt    # Python dependencies
-├── Containerfile       # Container image (python:3.13-slim)
-├── templates/
-│   ├── login.html      # Login page
-│   ├── chat.html       # Chat interface with admin controls
-│   ├── kb.html         # Knowledge base management (admin)
-│   └── analytics.html  # Analytics dashboard (admin)
-├── static/
-│   └── style.css       # UI styles
-├── data/
-│   └── policies/       # Policy markdown documents (RAG source)
-└── k8s/                # Kubernetes deployment manifests
+├── app/
+│   ├── app.py              # FastAPI application with auth, chat, KB management, analytics API
+│   ├── agents.py           # LangGraph multi-agent graph (supervisor, workers, QA, escalation)
+│   ├── auth.py             # Per-user password hashing (PBKDF2) and storage
+│   ├── tools.py            # Domain tool definitions (HR, Tech, Finance, Facilities, Analytics, Account, SMTP)
+│   ├── skills.py           # Dynamic skill registry — load, install, list skills + web research tools
+│   ├── rag.py              # RAG pipeline — ChromaDB indexing and retrieval (ONNX embeddings, no torch)
+│   ├── observability.py    # OpenTelemetry metrics, tracing, and JSON logging
+│   ├── requirements.txt    # Python dependencies
+│   ├── templates/
+│   │   ├── login.html      # Login page
+│   │   ├── chat.html       # Chat interface with admin controls
+│   │   ├── kb.html         # Knowledge base management (admin)
+│   │   └── analytics.html  # Analytics dashboard (admin)
+│   ├── static/
+│   │   └── style.css       # UI styles
+│   └── data/
+│       └── policies/       # Policy markdown documents (RAG source)
+├── scripts/                # Build, deploy, observability install scripts
+│   ├── manifests/          # Kubernetes manifests
+│   └── observability/      # Helm values for observability stack
+├── .devcontainer/          # GitHub Codespaces / devcontainer config
+└── Containerfile           # Container image (python:3.13-slim)
 ```
 
 ## Environment Variables
