@@ -21,15 +21,21 @@ if [ ! -f "${ENV_FILE}" ]; then
 fi
 
 # Source .env file (skip comments and blank lines)
-while IFS='=' read -r key value; do
-  key="${key%%#*}"
-  key="${key// /}"
-  [[ -z "$key" ]] && continue
-  [[ "$key" =~ ^# ]] && continue
+while IFS= read -r line; do
+  # Strip carriage return (Windows line endings)
+  line="${line//$'\r'/}"
+  # Skip blank lines and comments
+  [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+  # Split on first = only
+  key="${line%%=*}"
+  value="${line#*=}"
+  # Strip inline comments, surrounding quotes, trailing whitespace from value
   value="${value%%#*}"
-  value="${value#\"}"
-  value="${value%\"}"
+  value="${value#\"}" ; value="${value%\"}"
+  value="${value#\'}" ; value="${value%\'}"
   value="${value%"${value##*[![:space:]]}"}"
+  # Skip if key is empty or contains spaces (malformed line)
+  [[ -z "$key" || "$key" =~ [[:space:]] ]] && continue
   export "$key=$value"
 done < "${ENV_FILE}"
 
