@@ -8,6 +8,8 @@ FrontDesk AI is a self-evolving agentic AI employee support desk built with Fast
 
 ## Quick Start
 
+### Local (without Kubernetes)
+
 ```bash
 source .venv/bin/activate
 python app/app.py
@@ -15,6 +17,23 @@ python app/app.py
 ```
 
 Requires `GROQ_API_KEY` in `.env` file.
+
+### GitHub Codespace / kind cluster
+
+```bash
+cp .env.example .env          # set GROQ_API_KEY
+bash scripts/deploy.sh        # build + load into kind + deploy
+kubectl port-forward svc/frontdeskai 8000:80 &
+# Open http://localhost:8000
+```
+
+### Observability stack (optional)
+
+```bash
+bash scripts/install-observability.sh
+kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80 &
+# Open http://localhost:3000  (admin / admin)
+```
 
 ## Architecture
 
@@ -69,7 +88,7 @@ The agentic loop: skill code → filesystem, skill config → DB, LLM/SMTP confi
 3. JWT token set as httponly+samesite cookie (24h expiry)
 4. `current_user_email` ContextVar set before graph invocation for secure tool identity
 
-## Common Development Commands
+## Development Commands
 
 ```bash
 # Run locally
@@ -87,9 +106,16 @@ cd app && python -c "from tools import DOMAIN_TOOLS; print(list(DOMAIN_TOOLS.key
 # Verify skills module
 cd app && python -c "from skills import load_all_skills; print(load_all_skills())"
 
-# Build and deploy to kind / k8s
-bash scripts/build.sh
-bash scripts/deploy.sh
+# Build and deploy to kind cluster
+bash scripts/build.sh        # build image + kind load
+bash scripts/deploy.sh       # deploy manifests, auto-detects kind vs production
+
+# Redeploy after code changes (kind)
+bash scripts/build.sh && kubectl rollout restart deployment/frontdeskai
+
+# Check pod status and logs
+kubectl get pods -l app=frontdeskai
+kubectl logs deployment/frontdeskai
 ```
 
 ## Environment Variables
@@ -116,6 +142,50 @@ The full agentic cycle for adding a new capability, entirely via chat:
 6. **Configure** — Admin sets API keys via `set_skill_config` → encrypted in `system_config` DB
 7. **Execute** — Domain workers get skill tools injected at invocation time, `skill_config()` reads config from DB
 
+## Scripts & Manifests
+
+| File | Description |
+|------|-------------|
+| `scripts/deploy.sh` | One-command deploy — auto-detects kind vs production (checks kubectl context) |
+| `scripts/build.sh` | Build image and `kind load` (kind) or `docker push` (production) |
+| `scripts/install-observability.sh` | Install Prometheus, Grafana, Loki, Promtail, Tempo via Helm into `monitoring` namespace |
+| `scripts/generate-test-traffic.sh` | Generate load to populate observability dashboards |
+| `scripts/manifests/deployment.yaml` | App deployment (image: `frontdeskai:latest`, imagePullPolicy: Never for kind) |
+| `scripts/manifests/service.yaml` | ClusterIP service — ports: http(80→8000), metrics(9090→8000) |
+| `scripts/manifests/secret.yaml` | Secret template for API keys |
+| `scripts/manifests/servicemonitor.yaml` | ServiceMonitor for Prometheus Operator |
+| `scripts/observability/tempo.yaml` | Tempo Helm values — OTLP gRPC (4317) + HTTP (4318) receivers |
+| `scripts/observability/loki.yaml` | Loki Helm values — SingleBinary, filesystem storage |
+| `scripts/observability/promtail.yaml` | Promtail Helm values — JSON log parsing, trace_id label extraction |
+| `scripts/observability/kube-prometheus-stack.yaml` | Grafana + Prometheus Helm values — datasources with full 3-way correlation |
+
+## Deployment — kind cluster (Codespace / local)
+
+The devcontainer (`.devcontainer/`) provisions a kind cluster named `frontdeskai` automatically:
+- Base image: `mcr.microsoft.com/devcontainers/python:3.12-bookworm` (Bookworm required — Bullseye has expired Yarn GPG key that breaks Docker-in-Docker install)
+- Features: `docker-in-docker:2`, `kubectl-helm-minikube:1`
+- `postCreateCommand`: `.devcontainer/setup.sh` — installs kind binary, pip deps, creates cluster, creates `/shared/.sqlite`
+
+`scripts/deploy.sh` auto-detects environment via `kubectl config current-context`:
+- **kind**: `imagePullPolicy=Never`, `kind load docker-image` (no registry needed)
+- **production**: `imagePullPolicy=Always`, pushes to `${NAMESPACE}-registry.brainupgrade.in`
+
+## Observability Stack
+
+Full 3-way correlation: Prometheus metrics ↔ Loki logs ↔ Tempo traces, all linked via `trace_id`.
+
+- **Traces**: OTLP gRPC → Tempo (port 4317) via `BatchSpanProcessor`
+- **Metrics**: `/metrics` endpoint → Prometheus scrape (pod annotations required)
+- **Logs**: structured JSON → stdout → Promtail → Loki (trace_id extracted as label)
+- **Grafana**: datasources configured with derived fields (Loki→Tempo), exemplars (Prometheus→Tempo), tracesToLogs (Tempo→Loki)
+
+Pod annotations required for Prometheus scraping (already in `deployment.yaml`):
+```yaml
+prometheus.io/scrape: "true"
+prometheus.io/port: "8000"
+prometheus.io/path: "/metrics"
+```
+
 ## Conventions
 
 - Tools use `@tool` decorator from `langchain_core.tools`
@@ -129,3 +199,4 @@ The full agentic cycle for adding a new capability, entirely via chat:
 - Admin routes use `_require_admin()` helper, gated by `ADMIN_EMAILS`
 - User input in prompts is wrapped in `[USER_REQUEST_START]`/`[USER_REQUEST_END]` delimiters
 - All SQL uses parameterized queries; column names are never constructed from user input
+- `app/app.py` uses `__file__`-relative paths for `StaticFiles` and `Jinja2Templates` (required when running from repo root as `python app/app.py`)
