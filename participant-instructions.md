@@ -2,65 +2,146 @@
 
 ## Prerequisites
 
-- You are logged into your sandbox pod
-- `kubectl` is configured with your namespace
-- You have a Groq API key (get one at https://console.groq.com)
+- GitHub Codespace created from this repo (recommended), **or** a local machine with Docker and kubectl installed
+- A Groq API key — get one free at https://console.groq.com
 
-## Deploy (One Command)
+---
+
+## Option A: GitHub Codespace (Recommended)
+
+### 1. Launch the Codespace
+
+Open the repo on GitHub → **Code → Codespaces → Create codespace on main**
+
+The devcontainer automatically:
+- Installs Python 3.12, kubectl, helm, kind, Docker-in-Docker
+- Creates a local kind Kubernetes cluster named `frontdeskai`
+- Installs all Python dependencies
+
+Wait for the setup to finish (watch the terminal).
+
+### 2. Configure API Keys
+
+```bash
+cp .env.example .env
+# Edit .env and set your GROQ_API_KEY
+```
+
+### 3. Deploy the App
+
+```bash
+bash scripts/deploy.sh
+```
+
+This builds the container image, loads it into the kind cluster, creates the Kubernetes secret, and deploys the app.
+
+### 4. Access the App
+
+```bash
+kubectl port-forward svc/frontdeskai 8000:80 &
+```
+
+Open the **Ports** tab in VS Code and click the forwarded port 8000, or open:
+```
+http://localhost:8000
+```
+
+**Login:** Any email address + password `brainupgrade`
+(First login hashes and saves the password per user — you can change it later via chat)
+
+### 5. Install Observability Stack (Optional)
+
+```bash
+bash scripts/install-observability.sh
+```
+
+Installs Prometheus, Grafana, Loki, Promtail, and Tempo — fully correlated (metrics ↔ logs ↔ traces).
+
+```bash
+# Access Grafana
+kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80 &
+# Open http://localhost:3000  (admin / admin)
+```
+
+---
+
+## Option B: Local Machine
+
+### 1. Clone and Configure
 
 ```bash
 git clone https://github.com/brainupgrade-in/aiagentic-comp-frontdeskai.git
 cd aiagentic-comp-frontdeskai
-bash k8s/deploy.sh YOUR_GROQ_API_KEY
+
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r app/requirements.txt
+
+cp .env.example .env
+# Edit .env and set GROQ_API_KEY
 ```
 
-Replace `YOUR_GROQ_API_KEY` with your actual key.
-
-The script will automatically:
-1. Detect your namespace from kubectl context
-2. Deploy a private container registry in your namespace
-3. Build the container image
-4. Push the image to your private registry
-5. Create the Kubernetes secret with your API key
-6. Deploy the application
-7. Wait for the app to be ready
-
-## Access the App
-
-Once deployed, open in your browser:
-
-```
-https://YOURNAMESPACE-app.brainupgrade.in
-```
-
-**Login:** Any email address + password `brainupgrade` (first login saves a hashed password per user; you can change it later via chat)
-
-## Verify
+### 2. Run Locally (without Kubernetes)
 
 ```bash
-kubectl get pods
+python app/app.py
+# Open http://localhost:8000
+```
+
+### 3. Deploy to kind (with Kubernetes)
+
+```bash
+# Create kind cluster
+kind create cluster --name frontdeskai
+
+# Deploy app
+bash scripts/deploy.sh
+
+# Access
+kubectl port-forward svc/frontdeskai 8000:80 &
+```
+
+---
+
+## Verify Deployment
+
+```bash
+kubectl get pods -l app=frontdeskai
 kubectl logs deployment/frontdeskai
 ```
 
 ## Redeploy After Code Changes
 
-After modifying the code, rebuild and redeploy:
-
 ```bash
-bash k8s/build-and-push.sh
+bash scripts/build.sh
 kubectl rollout restart deployment/frontdeskai
 ```
 
+---
+
 ## Troubleshooting
 
-**Pod stuck in ImagePullBackOff:**
+**Pod stuck in `ImagePullBackOff` or `ErrImageNeverPull`:**
 ```bash
 kubectl describe pod -l app=frontdeskai
+# Rebuild and reload the image into kind
+bash scripts/build.sh
 ```
-Check that the registry pod is running: `kubectl get pods -l app=registry`
 
 **App not responding:**
 ```bash
 kubectl logs deployment/frontdeskai
+# Check the secret has the API key
+kubectl get secret frontdeskai-secret -o jsonpath='{.data.GROQ_API_KEY}' | base64 -d
 ```
-Check that the GROQ_API_KEY is set correctly: `kubectl get secret frontdeskai-secret -o yaml`
+
+**Port-forward drops after a while:**
+```bash
+kubectl port-forward svc/frontdeskai 8000:80 &
+```
+
+**kind cluster not found:**
+```bash
+kind get clusters
+# Recreate if missing
+kind create cluster --name frontdeskai
+```
