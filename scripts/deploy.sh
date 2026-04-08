@@ -1,7 +1,7 @@
 #!/bin/bash
 # Deploy FrontDesk AI.
 # Auto-detects environment:
-#   - kind context  → local image load, port-forward for access
+#   - kind context  → local image load, NodePort (localhost:8000 — no port-forward)
 #   - other context → production sandbox (brainupgrade.in registry + ingress)
 #
 # Usage: bash scripts/deploy.sh
@@ -104,11 +104,8 @@ if echo "${CURRENT_CONTEXT}" | grep -q "kind"; then
 
   echo ""
   echo "==> FrontDesk AI deployed to kind!"
-  echo "    Access the app:"
-  echo "      kubectl port-forward svc/frontdeskai 8000:80 &"
-  echo "      open http://localhost:8000"
-  echo "    Prometheus metrics:"
-  echo "      kubectl port-forward svc/frontdeskai 9090:9090 &"
+  echo "    Access the app:      http://localhost:8000  (NodePort 30800)"
+  echo "    Prometheus metrics:  http://localhost:9090  (NodePort 30900)"
   echo "    Verify: kubectl get pods -l app=frontdeskai"
 
 # ── Production sandbox (brainupgrade.in) ─────────────────────────────────────
