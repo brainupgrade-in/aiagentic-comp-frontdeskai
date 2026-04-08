@@ -1,0 +1,144 @@
+# kube-prometheus-stack — Prometheus + Grafana for kind/Codespace
+# Grafana pre-configured with all three datasources wired for full correlation:
+#   Prometheus ↔ Loki ↔ Tempo (metrics, logs, traces linked by trace_id)
+
+# Disable Alertmanager to save RAM on kind
+alertmanager:
+  enabled: false
+
+prometheus:
+  prometheusSpec:
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "200m"
+      limits:
+        memory: "1Gi"
+        cpu: "500m"
+    # Pick up ServiceMonitors and PodMonitors from any namespace
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    # Scrape pods with prometheus.io/scrape=true annotations (FrontDesk AI uses these)
+    additionalScrapeConfigs:
+      - job_name: kubernetes-pods
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            target_label: app
+
+grafana:
+  adminPassword: admin
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "250m"
+
+  # ── Datasources with full three-way correlation ─────────────────────────────
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+
+        # Prometheus — metrics
+        # Linked to Tempo: exemplar trace_id → click through to trace
+        - name: Prometheus
+          type: prometheus
+          uid: prometheus
+          url: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090
+          isDefault: true
+          jsonData:
+            exemplarTraceIdDestinations:
+              - name: trace_id
+                datasourceUid: tempo
+                urlDisplayLabel: "View Trace in Tempo"
+
+        # Loki — logs
+        # Derived field: extracts trace_id from JSON log → link to Tempo trace
+        - name: Loki
+          type: loki
+          uid: loki
+          url: http://loki.monitoring.svc.cluster.local:3100
+          jsonData:
+            derivedFields:
+              - name: TraceID
+                matcherRegex: '"trace_id":"([a-f0-9]{32})"'
+                url: "${__value.raw}"
+                datasourceUid: tempo
+                urlDisplayLabel: "View Trace in Tempo"
+
+        # Tempo — distributed traces
+        # Linked back to Loki (logs for this trace) and Prometheus (metrics for this service)
+        - name: Tempo
+          type: tempo
+          uid: tempo
+          url: http://tempo.monitoring.svc.cluster.local:3200
+          jsonData:
+            # Traces → Logs: click a trace span → jump to Loki logs with that trace_id
+            tracesToLogsV2:
+              datasourceUid: loki
+              filterByTraceID: true
+              customQuery: true
+              query: '{app="frontdeskai"} | json | trace_id="${__trace.traceId}"'
+            # Traces → Metrics: see request rate / latency alongside a trace
+            tracesToMetrics:
+              datasourceUid: prometheus
+              tags:
+                - key: app
+                  value: app
+              queries:
+                - name: "Request rate"
+                  query: 'rate(frontdeskai_request_duration_seconds_count{$$__tags}[5m])'
+                - name: "LLM latency p95"
+                  query: 'histogram_quantile(0.95, rate(frontdeskai_llm_call_duration_seconds_bucket{$$__tags}[5m]))'
+            # Service map powered by Prometheus span metrics
+            serviceMap:
+              datasourceUid: prometheus
+            nodeGraph:
+              enabled: true
+            search:
+              hide: false
+
+  # ── Dashboards ──────────────────────────────────────────────────────────────
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: frontdeskai
+          folder: FrontDesk AI
+          type: file
+          disableDeletion: false
+          options:
+            path: /var/lib/grafana/dashboards/frontdeskai
+
+  dashboards:
+    frontdeskai:
+      # Kubernetes cluster overview (pre-built)
+      kubernetes-cluster:
+        gnetId: 7249
+        revision: 1
+        datasource: Prometheus
+      # Loki log explorer
+      loki-logs:
+        gnetId: 13639
+        revision: 2
+        datasource: Loki

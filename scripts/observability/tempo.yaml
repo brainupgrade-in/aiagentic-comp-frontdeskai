@@ -1,0 +1,34 @@
+# Tempo — distributed tracing backend (single binary for kind/Codespace)
+# Receives OTLP traces from FrontDesk AI on port 4317 (gRPC)
+# Queried by Grafana on port 3200 (HTTP)
+
+reportingEnabled: false
+
+tempo:
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "250m"
+
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: "0.0.0.0:4317"
+        http:
+          endpoint: "0.0.0.0:4318"
+
+  storage:
+    trace:
+      backend: local
+      local:
+        path: /var/tempo/traces
+      wal:
+        path: /var/tempo/wal
+
+persistence:
+  enabled: true
+  size: 2Gi

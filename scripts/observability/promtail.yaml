@@ -1,0 +1,33 @@
+# Promtail — log collector DaemonSet
+# Tails pod logs from kind nodes, parses JSON, extracts trace_id for Loki→Tempo correlation
+
+config:
+  clients:
+    - url: http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push
+
+  snippets:
+    # Parse JSON log lines emitted by FrontDesk AI's JsonFormatter
+    # Extracts trace_id and level as indexed labels for Loki→Tempo drill-through
+    pipelineStages:
+      - json:
+          expressions:
+            trace_id: trace_id
+            span_id: span_id
+            level: level
+            logger: logger
+      - labels:
+          trace_id: ""
+          level: ""
+          logger: ""
+      # Drop zero trace_ids to avoid polluting Loki label cardinality
+      - drop:
+          source: trace_id
+          value: "0"
+
+resources:
+  requests:
+    memory: "64Mi"
+    cpu: "50m"
+  limits:
+    memory: "128Mi"
+    cpu: "100m"
