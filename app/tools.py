@@ -215,7 +215,10 @@ def _init_schema(conn: sqlite3.Connection):
         CREATE INDEX IF NOT EXISTS idx_payslips_month ON payslips(month);
     """)
 
-    # ---------- Seed reference data (idempotent via INSERT OR IGNORE) ----------
+    # ---------- Demo seed data (only when SEED_DEMO_DATA=true) ----------
+    if os.getenv("SEED_DEMO_DATA", "").lower() != "true":
+        conn.commit()
+        return
 
     employees = [
         ("rajesh",       "Rajesh Gheware",  "rajesh@unigps.in",       "engineering", "CTO",               "2020-01-15"),

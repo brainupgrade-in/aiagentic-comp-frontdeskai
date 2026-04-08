@@ -134,6 +134,7 @@ kubectl logs deployment/frontdeskai
 | `AUTH_PASSWORD` | No | `brainupgrade` |
 | `ADMIN_EMAILS` | No | `admin@unigps.in` |
 | `SQLITE_DIR` | No | `/shared/.sqlite` |
+| `SEED_DEMO_DATA` | No | `false` — set to `true` to pre-populate employees, tickets, expenses, leave, rooms, payslips for demos |
 
 Note: All runtime configuration is managed through chat (stored in `system_config` table, persists across restarts with zero rebuild): LLM model/provider/API key, SMTP email settings, and per-skill configuration (API keys, base URLs, etc.). SMTP password and secret skill config values are encrypted with Fernet (derived from `SECRET_KEY`).
 
