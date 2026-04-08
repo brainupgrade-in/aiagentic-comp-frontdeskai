@@ -697,12 +697,14 @@ body {
     border-radius: 6px;
     transition: width 0.4s ease;
 }
-.analytics-bar-hr        { background: var(--accent); }
-.analytics-bar-tech      { background: var(--cyan); }
-.analytics-bar-finance   { background: var(--green); }
-.analytics-bar-facilities { background: var(--yellow); }
-.analytics-bar-analytics { background: #a78bfa; }
-.analytics-bar-general   { background: var(--text-secondary); }
+.analytics-bar-hr          { background: var(--accent); }
+.analytics-bar-tech        { background: var(--cyan); }
+.analytics-bar-finance     { background: var(--green); }
+.analytics-bar-facilities  { background: var(--yellow); }
+.analytics-bar-analytics   { background: #a78bfa; }
+.analytics-bar-account     { background: var(--orange); }
+.analytics-bar-skill_admin { background: var(--red); }
+.analytics-bar-general     { background: var(--text-secondary); }
 .analytics-bar-value {
     width: 36px;
     font-size: 13px;
@@ -752,7 +754,11 @@ body {
     .analytics-row-2col { grid-template-columns: 1fr; }
     .analytics-bar-label { width: 60px; font-size: 11px; }
     .analytics-bar-value { width: 28px; font-size: 12px; }
-    .analytics-table { font-size: 12px; }
+    .analytics-section { overflow-x: auto; }
+    .analytics-table { font-size: 12px; min-width: 480px; }
     .analytics-table th,
     .analytics-table td { padding: 6px 6px; }
+    .analytics-row { grid-template-columns: 1fr 1fr; }
+    .chat-header { flex-wrap: wrap; gap: 8px; }
+    .header-right { flex-wrap: wrap; gap: 6px; }
 }

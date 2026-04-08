@@ -337,20 +337,40 @@ WORKER_CONFIGS = {
     },
     "tech": {
         "system_prompt": (
-            "You are UniGPS IT Support.\n"
+            "You are UniGPS IT Support.\n\n"
+            "IMPORTANT — for transactional requests, ALWAYS call the appropriate tool:\n"
+            "- Employee reports an issue or requests IT help → call create_ticket with employee_id, "
+            "a clear summary, description, priority (P1=critical/production, P2=high, P3=medium, P4=low), "
+            "and category (network/hardware/software/access).\n"
+            "- Employee asks about a specific ticket → call get_ticket_status with the ticket_id.\n"
+            "- Employee asks to list their tickets → call list_my_tickets with the employee_id.\n"
+            "Do NOT just describe the process — create the ticket when asked.\n\n"
             "Escalate if: P1 severity (production down, data loss, security breach)."
         ),
         "can_escalate": True,
     },
     "finance": {
         "system_prompt": (
-            "You are UniGPS Finance team."
+            "You are UniGPS Finance team.\n\n"
+            "IMPORTANT — for transactional requests, ALWAYS call the appropriate tool:\n"
+            "- Employee asks about an expense claim → call get_expense_status with the employee_id.\n"
+            "- Employee wants to submit an expense → call submit_expense_claim with employee_id, "
+            "amount, category (travel/meals/software/hardware/training/other), description, receipt_count.\n"
+            "- Employee asks for payslip → call get_payslip with employee_id and month (YYYY-MM format; "
+            "infer current or previous month if not specified).\n"
+            "Do NOT just explain policy when the employee is making an actual request — take action."
         ),
         "can_escalate": False,
     },
     "facilities": {
         "system_prompt": (
-            "You are UniGPS Facilities/Admin team."
+            "You are UniGPS Facilities/Admin team.\n\n"
+            "IMPORTANT — for transactional requests, ALWAYS call the appropriate tool:\n"
+            "- Employee asks about room availability → call check_room_availability with date (YYYY-MM-DD), "
+            "start_time, end_time (HH:MM), and optionally min_capacity.\n"
+            "- Employee wants to book a room → call book_meeting_room with room_id, date, start_time, "
+            "end_time, booked_by (employee_id), purpose, and attendees count.\n"
+            "Do NOT just describe the booking process — check availability and book when asked."
         ),
         "can_escalate": False,
     },
@@ -459,11 +479,12 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
         tool_instructions = (
             f"\n\nYou have access to these tools: {tool_names}. "
             "Follow this reasoning process:\n"
-            "1. THINK: What information do I need? Can I answer from the policy docs, or do I need to look up real data?\n"
-            "2. ACT: If you need real data, call the appropriate tool. If you can answer from policies, respond directly.\n"
-            "3. OBSERVE: Review the tool result. Is it sufficient, or do you need another tool call?\n"
-            "Repeat until you have enough information to give a complete answer. "
-            "Do NOT call tools if the request is a general question answerable from the policy documents."
+            "1. THINK: What does the employee need? Is this a transactional request (apply, create, book, submit, check) "
+            "or a general policy question?\n"
+            "2. ACT: For transactional requests ALWAYS call the appropriate tool. "
+            "For pure policy questions (e.g. 'how many leave days do I get?') you may answer from the policy docs directly.\n"
+            "3. OBSERVE: Review the tool result and confirm it answers the request.\n"
+            "Repeat until you have enough information to give a complete answer."
         )
 
     system_content = (
