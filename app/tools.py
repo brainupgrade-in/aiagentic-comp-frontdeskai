@@ -381,6 +381,10 @@ def _init_schema(conn: sqlite3.Connection):
         ("llm_model",       "llama-3.3-70b-versatile"),
         ("llm_temperature", "0"),
         ("llm_api_key",     ""),
+        ("llm_fallback_provider",    ""),
+        ("llm_fallback_model",       ""),
+        ("llm_fallback_temperature", "0"),
+        ("llm_fallback_api_key",     ""),
         ("smtp_host",       ""),
         ("smtp_port",       "587"),
         ("smtp_username",   ""),
@@ -1188,13 +1192,23 @@ def _decrypt_value(ciphertext: str) -> str:
 
 @tool
 def get_llm_config() -> str:
-    """Get the current LLM configuration (model, provider, temperature, API key status)."""
+    """Get the current LLM configuration (primary and fallback)."""
     provider = _get_system_config("llm_provider") or "groq"
     model = _get_system_config("llm_model") or "llama-3.3-70b-versatile"
     temp = _get_system_config("llm_temperature") or "0"
     api_key = _get_system_config("llm_api_key") or ""
-
     key_status = f"custom key configured ({_mask_api_key(api_key)})" if api_key else "using environment variable"
+
+    fb_provider = _get_system_config("llm_fallback_provider") or ""
+    fb_model = _get_system_config("llm_fallback_model") or ""
+    fb_api_key = _get_system_config("llm_fallback_api_key") or ""
+
+    fb_section = (
+        f"\nFallback LLM (used when primary hits rate limits or errors):\n"
+        f"  Provider:    {fb_provider}\n"
+        f"  Model:       {fb_model}\n"
+        f"  API Key:     {'custom key configured (' + _mask_api_key(fb_api_key) + ')' if fb_api_key else 'using environment variable'}"
+    ) if fb_model else "\nFallback LLM: not configured (say 'configure fallback LLM' to set one)"
 
     return (
         f"Current LLM Configuration:\n"
@@ -1202,6 +1216,7 @@ def get_llm_config() -> str:
         f"  Model:       {model}\n"
         f"  Temperature: {temp}\n"
         f"  API Key:     {key_status}"
+        f"{fb_section}"
     )
 
 

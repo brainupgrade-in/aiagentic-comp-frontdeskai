@@ -32,11 +32,34 @@ _llm_config = {
     "temperature": 0.0,
     "api_key": "",  # empty = use env var
 }
+_llm_fallback_config = {
+    "provider": "",   # empty = no fallback configured
+    "model": "",
+    "temperature": 0.0,
+    "api_key": "",
+}
 _llm_cache: dict = {}  # keyed by config fingerprint
 
 
 def _config_db_path() -> str:
     return os.path.join(os.getenv("SQLITE_DIR", "/shared/.sqlite"), "frontdesk_tools.db")
+
+
+def _build_llm(cfg: dict):
+    """Build an LLM instance from a config dict."""
+    if cfg["provider"] == "openrouter":
+        api_key = cfg["api_key"] or os.getenv("OPENROUTER_API_KEY", "")
+        return ChatOpenAI(
+            model=cfg["model"],
+            temperature=cfg["temperature"],
+            api_key=SecretStr(api_key) if api_key else None,
+            base_url="https://openrouter.ai/api/v1",
+        )
+    else:
+        kwargs = {"model": cfg["model"], "temperature": cfg["temperature"]}
+        if cfg["api_key"]:
+            kwargs["api_key"] = cfg["api_key"]
+        return ChatGroq(**kwargs)
 
 
 def load_llm_config():
@@ -48,7 +71,9 @@ def load_llm_config():
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT key, value FROM system_config WHERE key IN ('llm_provider','llm_model','llm_temperature','llm_api_key')"
+            "SELECT key, value FROM system_config WHERE key IN "
+            "('llm_provider','llm_model','llm_temperature','llm_api_key',"
+            "'llm_fallback_provider','llm_fallback_model','llm_fallback_temperature','llm_fallback_api_key')"
         ).fetchall()
         conn.close()
         for row in rows:
@@ -61,6 +86,14 @@ def load_llm_config():
                 _llm_config["temperature"] = float(v)
             elif k == "llm_api_key":
                 _llm_config["api_key"] = v
+            elif k == "llm_fallback_provider":
+                _llm_fallback_config["provider"] = v or ""
+            elif k == "llm_fallback_model":
+                _llm_fallback_config["model"] = v or ""
+            elif k == "llm_fallback_temperature" and v:
+                _llm_fallback_config["temperature"] = float(v)
+            elif k == "llm_fallback_api_key":
+                _llm_fallback_config["api_key"] = v or ""
     except Exception:
         pass  # Table may not exist yet on first run
 
@@ -72,24 +105,46 @@ def reload_llm_config():
 
 
 def get_llm():
-    """Return a cached LLM instance for the current config."""
+    """Return a cached primary LLM instance."""
     cfg = _llm_config
     cache_key = f"{cfg['provider']}:{cfg['model']}:{cfg['temperature']}:{hash(cfg['api_key'])}"
     if cache_key not in _llm_cache:
-        if cfg["provider"] == "openrouter":
-            api_key = cfg["api_key"] or os.getenv("OPENROUTER_API_KEY", "")
-            _llm_cache[cache_key] = ChatOpenAI(
-                model=cfg["model"],
-                temperature=cfg["temperature"],
-                api_key=SecretStr(api_key) if api_key else None,
-                base_url="https://openrouter.ai/api/v1",
-            )
-        else:
-            kwargs = {"model": cfg["model"], "temperature": cfg["temperature"]}
-            if cfg["api_key"]:
-                kwargs["api_key"] = cfg["api_key"]
-            _llm_cache[cache_key] = ChatGroq(**kwargs)
+        _llm_cache[cache_key] = _build_llm(cfg)
     return _llm_cache[cache_key]
+
+
+def get_fallback_llm():
+    """Return a cached fallback LLM instance, or None if not configured."""
+    cfg = _llm_fallback_config
+    if not cfg.get("model"):
+        return None
+    cache_key = f"fb:{cfg['provider']}:{cfg['model']}:{cfg['temperature']}:{hash(cfg['api_key'])}"
+    if cache_key not in _llm_cache:
+        _llm_cache[cache_key] = _build_llm(cfg)
+    return _llm_cache[cache_key]
+
+
+def get_llm_chain(structured_output_cls=None):
+    """Return primary LLM chain (optionally with structured output) wrapped with fallback.
+
+    Usage:
+        get_llm_chain(Classification).invoke(prompt)   # structured output
+        get_llm_chain().invoke(messages)               # plain completion
+    """
+    primary = get_llm()
+    fb = get_fallback_llm()
+
+    if structured_output_cls:
+        primary_chain = primary.with_structured_output(structured_output_cls)
+        if fb:
+            return primary_chain.with_fallbacks(
+                [fb.with_structured_output(structured_output_cls)]
+            )
+        return primary_chain
+    else:
+        if fb:
+            return primary.with_fallbacks([fb])
+        return primary
 
 
 # Load persisted config on import
@@ -241,7 +296,7 @@ def supervisor(state: SupportRequest) -> dict:
             request=state["request"],
         )
         with trace_llm_call("supervisor") as ctx:
-            result = get_llm().with_structured_output(Classification).invoke(prompt)
+            result = get_llm_chain(Classification).invoke(prompt)
             ctx["response"] = result
         return {
             "category": result.category,
@@ -536,7 +591,6 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
                 )))
 
             # Dynamic skill tool injection: check for loaded skill tools targeting this category
-            current_llm = get_llm()
             skill_tools = get_skill_tools(name)
             if skill_tools:
                 active_tools = domain_tools + skill_tools
@@ -550,7 +604,15 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
                 active_tools = domain_tools
                 active_tools_by_name = tools_by_name
 
-            active_tool_llm = current_llm.bind_tools(active_tools) if active_tools else None
+            if active_tools:
+                primary_tool_llm = get_llm().bind_tools(active_tools)
+                fb = get_fallback_llm()
+                active_tool_llm = (
+                    primary_tool_llm.with_fallbacks([fb.bind_tools(active_tools)])
+                    if fb else primary_tool_llm
+                )
+            else:
+                active_tool_llm = None
 
             tool_calls_log = []
             react_iterations = 0
@@ -594,7 +656,7 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
 
             # === Final structured response (with full tool context in messages) ===
             with trace_llm_call(f"{name}_worker_final") as ctx:
-                result = get_llm().with_structured_output(WorkerResponse).invoke(messages)
+                result = get_llm_chain(WorkerResponse).invoke(messages)
                 ctx["response"] = result
 
             escalate = can_escalate and result.needs_escalation
@@ -721,7 +783,7 @@ def manager_agent(state: SupportRequest) -> dict:
             worker_output=state["worker_output"][:200],
         )
         with trace_llm_call("manager") as ctx:
-            response = get_llm().invoke(messages)
+            response = get_llm_chain().invoke(messages)
             ctx["response"] = response
         return {
             "worker_output": f"[Manager Review] {response.content.strip()}",
