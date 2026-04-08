@@ -10,7 +10,7 @@ FrontDesk AI is a self-evolving agentic AI employee support desk built with Fast
 
 ```bash
 source .venv/bin/activate
-python app.py
+python app/app.py
 # Open http://localhost:8000
 ```
 
@@ -19,7 +19,8 @@ Requires `GROQ_API_KEY` in `.env` file.
 ## Architecture
 
 ```
-app.py (FastAPI)
+app/
+  app.py         (FastAPI)
   ├── auth.py          — per-user password hashing (PBKDF2), ContextVar identity
   ├── agents.py        — LangGraph graph: supervisor → RAG → workers → QA → finalize
   │     ├── tools.py   — domain tools (HR, Tech, Finance, Facilities, Analytics, Account)
@@ -32,13 +33,13 @@ app.py (FastAPI)
 
 | File | Purpose |
 |------|---------|
-| `app.py` | FastAPI routes: login, chat, KB management, analytics API, admin gates |
-| `agents.py` | LangGraph StateGraph: supervisor, 8 domain workers, QA, manager, fallback. Dynamic LLM factory (`get_llm()`) supports Groq and OpenRouter providers |
-| `auth.py` | Password hashing (PBKDF2-SHA256, 600k iter), `users` table, `current_user_email` ContextVar |
-| `tools.py` | LangChain `@tool` functions for each domain + schema/seed data |
-| `skills.py` | Dynamic skill registry: load/install/list/configure skills, web research tools, `skill_config()` helper, runtime tool injection |
-| `rag.py` | ChromaDB indexing of `data/policies/*.md`, retrieval with category filtering (ONNX embeddings, no torch) |
-| `observability.py` | OpenTelemetry metrics, Prometheus exporter, JSON logging, Langfuse integration |
+| `app/app.py` | FastAPI routes: login, chat, KB management, analytics API, admin gates |
+| `app/agents.py` | LangGraph StateGraph: supervisor, 8 domain workers, QA, manager, fallback. Dynamic LLM factory (`get_llm()`) supports Groq and OpenRouter providers |
+| `app/auth.py` | Password hashing (PBKDF2-SHA256, 600k iter), `users` table, `current_user_email` ContextVar |
+| `app/tools.py` | LangChain `@tool` functions for each domain + schema/seed data |
+| `app/skills.py` | Dynamic skill registry: load/install/list/configure skills, web research tools, `skill_config()` helper, runtime tool injection |
+| `app/rag.py` | ChromaDB indexing of `app/data/policies/*.md`, retrieval with category filtering (ONNX embeddings, no torch) |
+| `app/observability.py` | OpenTelemetry metrics, Prometheus exporter, JSON logging, Langfuse integration |
 
 ## Agent Categories
 
@@ -72,23 +73,23 @@ The agentic loop: skill code → filesystem, skill config → DB, LLM/SMTP confi
 
 ```bash
 # Run locally
-python app.py
+python app/app.py
 
 # Verify auth module
-python -c "from auth import hash_password, verify_password; h,s = hash_password('test'); print(verify_password('test',h,s))"
+cd app && python -c "from auth import hash_password, verify_password; h,s = hash_password('test'); print(verify_password('test',h,s))"
 
 # Verify graph wiring
-python -c "from agents import build_graph; g = build_graph(); print(sorted(g.nodes))"
+cd app && python -c "from agents import build_graph; g = build_graph(); print(sorted(g.nodes))"
 
 # Verify tools
-python -c "from tools import DOMAIN_TOOLS; print(list(DOMAIN_TOOLS.keys()))"
+cd app && python -c "from tools import DOMAIN_TOOLS; print(list(DOMAIN_TOOLS.keys()))"
 
 # Verify skills module
-python -c "from skills import load_all_skills; print(load_all_skills())"
+cd app && python -c "from skills import load_all_skills; print(load_all_skills())"
 
-# Build and deploy to K8s
-bash k8s/build-and-push.sh
-kubectl rollout restart deployment/frontdeskai
+# Build and deploy to kind / k8s
+bash scripts/build.sh
+bash scripts/deploy.sh
 ```
 
 ## Environment Variables

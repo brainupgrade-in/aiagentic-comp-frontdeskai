@@ -8,7 +8,7 @@ sudo install -o root -g root -m 0755 /tmp/kind /usr/local/bin/kind
 rm /tmp/kind
 
 echo "==> Installing Python dependencies..."
-pip install --quiet -r requirements.txt
+pip install --quiet -r app/requirements.txt
 
 echo "==> Creating /shared/.sqlite directory..."
 sudo mkdir -p /shared/.sqlite
@@ -38,5 +38,5 @@ echo "      kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana
 echo "      http://localhost:3000  (admin / admin)"
 echo ""
 echo " 4. Run app locally (without k8s):"
-echo "      python app.py"
+echo "      python app/app.py"
 echo "=========================================================="

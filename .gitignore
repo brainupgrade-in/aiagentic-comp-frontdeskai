@@ -3,5 +3,8 @@ __pycache__/
 *.pyc
 .env
 /shared/
-/data/
+# app/data/ is source-controlled (seed policies, templates)
+# but ignore runtime-generated files inside it
+app/data/.sqlite/
+app/data/.frontdeskai/
 *.db

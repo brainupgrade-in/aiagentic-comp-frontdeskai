@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agentic AI Course Completion Certificate</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=Inter:wght@400;500;600;700&family=Great+Vibes&display=swap');
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: #f0f0f0;
+            font-family: 'Inter', sans-serif;
+        }
+
+        .certificate {
+            width: 1056px;
+            height: 816px;
+            background: #ffffff;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+        }
+
+        /* Outer border */
+        .certificate::before {
+            content: '';
+            position: absolute;
+            inset: 12px;
+            border: 3px solid #dc2626;
+            pointer-events: none;
+            z-index: 2;
+        }
+
+        /* Inner border */
+        .certificate::after {
+            content: '';
+            position: absolute;
+            inset: 20px;
+            border: 1px solid #b91c1c;
+            pointer-events: none;
+            z-index: 2;
+        }
+
+        /* Top accent bar */
+        .top-bar {
+            height: 8px;
+            background: linear-gradient(90deg, #dc2626, #b91c1c, #1e40af, #b91c1c, #dc2626);
+        }
+
+        /* Corner ornaments */
+        .corner {
+            position: absolute;
+            width: 80px;
+            height: 80px;
+            z-index: 3;
+        }
+        .corner svg { width: 100%; height: 100%; }
+        .corner-tl { top: 28px; left: 28px; }
+        .corner-tr { top: 28px; right: 28px; transform: scaleX(-1); }
+        .corner-bl { bottom: 28px; left: 28px; transform: scaleY(-1); }
+        .corner-br { bottom: 28px; right: 28px; transform: scale(-1, -1); }
+
+        .content {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: calc(100% - 8px);
+            padding: 50px 80px 40px;
+            text-align: center;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* Watermark */
+        .watermark {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-family: 'Playfair Display', serif;
+            font-size: 200px;
+            font-weight: 900;
+            color: rgba(220, 38, 38, 0.03);
+            letter-spacing: 20px;
+            white-space: nowrap;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .org-name {
+            font-family: 'Inter', sans-serif;
+            font-weight: 700;
+            font-size: 15px;
+            letter-spacing: 6px;
+            text-transform: uppercase;
+            color: #1e40af;
+            margin-bottom: 4px;
+        }
+
+        .org-tagline {
+            font-size: 11px;
+            color: #64748b;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            margin-bottom: 20px;
+        }
+
+        .cert-title {
+            font-family: 'Playfair Display', serif;
+            font-size: 48px;
+            font-weight: 900;
+            background: linear-gradient(135deg, #dc2626, #b91c1c);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 6px;
+            line-height: 1.1;
+        }
+
+        .cert-subtitle {
+            font-size: 14px;
+            letter-spacing: 4px;
+            text-transform: uppercase;
+            color: #475569;
+            margin-bottom: 24px;
+        }
+
+        .divider {
+            width: 120px;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #dc2626, transparent);
+            margin-bottom: 22px;
+        }
+
+        .presented-to {
+            font-size: 13px;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            margin-bottom: 8px;
+        }
+
+        .recipient-name {
+            font-family: 'Great Vibes', cursive;
+            font-size: 52px;
+            color: #1e40af;
+            margin-bottom: 16px;
+            line-height: 1.2;
+        }
+
+        .description {
+            font-size: 14px;
+            color: #475569;
+            line-height: 1.7;
+            max-width: 680px;
+            margin-bottom: 28px;
+        }
+
+        .course-name {
+            font-weight: 700;
+            color: #dc2626;
+        }
+
+        .details-row {
+            display: flex;
+            gap: 40px;
+            margin-bottom: 30px;
+        }
+
+        .detail-item {
+            text-align: center;
+        }
+
+        .detail-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: #94a3b8;
+            margin-bottom: 2px;
+        }
+
+        .detail-value {
+            font-size: 13px;
+            font-weight: 600;
+            color: #334155;
+        }
+
+        .signatures {
+            display: flex;
+            justify-content: center;
+            gap: 140px;
+            width: 100%;
+        }
+
+        .signature {
+            text-align: center;
+            min-width: 200px;
+        }
+
+        .sig-line {
+            width: 200px;
+            height: 1px;
+            background: #cbd5e1;
+            margin: 0 auto 6px;
+        }
+
+        .sig-name {
+            font-weight: 600;
+            font-size: 14px;
+            color: #334155;
+        }
+
+        .sig-title {
+            font-size: 11px;
+            color: #94a3b8;
+        }
+
+        /* Bottom accent bar */
+        .bottom-bar {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 8px;
+            background: linear-gradient(90deg, #dc2626, #b91c1c, #1e40af, #b91c1c, #dc2626);
+        }
+
+        /* Badge */
+        .badge {
+            position: absolute;
+            top: 36px;
+            right: 50px;
+            width: 70px;
+            height: 70px;
+            z-index: 4;
+        }
+
+        @media print {
+            body { background: white; }
+            .certificate { box-shadow: none; }
+        }
+    </style>
+</head>
+<body>
+    <div class="certificate">
+        <div class="top-bar"></div>
+
+        <!-- Corner ornaments -->
+        <div class="corner corner-tl">
+            <svg viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M0 0 L40 0 Q20 0 20 20 L20 40 Q20 20 0 20 Z" fill="#dc2626" opacity="0.12"/>
+                <path d="M0 0 L28 0 Q10 0 10 10 L10 28 Q10 10 0 10 Z" fill="#dc2626" opacity="0.2"/>
+            </svg>
+        </div>
+        <div class="corner corner-tr">
+            <svg viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M0 0 L40 0 Q20 0 20 20 L20 40 Q20 20 0 20 Z" fill="#dc2626" opacity="0.12"/>
+                <path d="M0 0 L28 0 Q10 0 10 10 L10 28 Q10 10 0 10 Z" fill="#dc2626" opacity="0.2"/>
+            </svg>
+        </div>
+        <div class="corner corner-bl">
+            <svg viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M0 0 L40 0 Q20 0 20 20 L20 40 Q20 20 0 20 Z" fill="#dc2626" opacity="0.12"/>
+                <path d="M0 0 L28 0 Q10 0 10 10 L10 28 Q10 10 0 10 Z" fill="#dc2626" opacity="0.2"/>
+            </svg>
+        </div>
+        <div class="corner corner-br">
+            <svg viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M0 0 L40 0 Q20 0 20 20 L20 40 Q20 20 0 20 Z" fill="#dc2626" opacity="0.12"/>
+                <path d="M0 0 L28 0 Q10 0 10 10 L10 28 Q10 10 0 10 Z" fill="#dc2626" opacity="0.2"/>
+            </svg>
+        </div>
+
+        <!-- Verified badge -->
+        <div class="badge">
+            <svg viewBox="0 0 70 70" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="35" cy="35" r="30" fill="#dc2626" opacity="0.1"/>
+                <circle cx="35" cy="35" r="22" fill="#dc2626" opacity="0.15"/>
+                <circle cx="35" cy="35" r="15" fill="#dc2626"/>
+                <path d="M28 35 L33 40 L43 30" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            </svg>
+        </div>
+
+        <div class="content">
+            <div class="watermark">GHEWARE</div>
+
+            <div class="org-name">Gheware DevOps Academy</div>
+            <div class="org-tagline">Enterprise DevOps Training &amp; Certification</div>
+
+            <div class="cert-title">Certificate</div>
+            <div class="cert-subtitle">of Course Completion</div>
+
+            <div class="divider"></div>
+
+            <div class="presented-to">This is proudly presented to</div>
+
+            <div class="recipient-name">Participant Name</div>
+
+            <p class="description">
+                for successfully completing the intensive
+                <span class="course-name">Agentic AI — Building Self-Evolving AI Systems</span>
+                training program covering multi-agent orchestration, LangGraph, RAG pipelines,
+                dynamic skill installation, and production deployment on Kubernetes.
+            </p>
+
+            <div class="details-row">
+                <div class="detail-item">
+                    <div class="detail-label">Date</div>
+                    <div class="detail-value">February 20, 2026</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">Duration</div>
+                    <div class="detail-value">3 Days</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">Certificate ID</div>
+                    <div class="detail-value">GAAI-2026-0001</div>
+                </div>
+            </div>
+
+            <div class="signatures">
+                <div class="signature">
+                    <div class="sig-line"></div>
+                    <div class="sig-name">Rajesh Gheware</div>
+                    <div class="sig-title">Lead Instructor &amp; DevOps Expert</div>
+                </div>
+                <div class="signature">
+                    <div class="sig-line"></div>
+                    <div class="sig-name">Gheware DevOps Academy</div>
+                    <div class="sig-title">Training Division</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="bottom-bar"></div>
+    </div>
+</body>
+</html>

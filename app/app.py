@@ -150,9 +150,10 @@ async def security_headers(request: Request, call_next):
     )
     return response
 
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
 app.mount("/metrics", get_metrics_app())
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+app.mount("/static", StaticFiles(directory=os.path.join(_APP_DIR, "static")), name="static")
+templates = Jinja2Templates(directory=os.path.join(_APP_DIR, "templates"))
 
 
 @app.get("/", response_class=HTMLResponse)
