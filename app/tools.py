@@ -106,8 +106,7 @@ def _init_schema(conn: sqlite3.Connection):
             category      TEXT NOT NULL DEFAULT 'general'
                           CHECK(category IN ('hardware','software','network','access','security','general')),
             assignee      TEXT REFERENCES employees(employee_id),
-            created_by    TEXT NOT NULL
-                          REFERENCES employees(employee_id),
+            created_by    TEXT REFERENCES employees(employee_id),
             resolved_at   TEXT,
             sla_hours     INTEGER NOT NULL DEFAULT 48,    -- derived from priority
             created_at    TEXT NOT NULL DEFAULT (datetime('now')),
@@ -214,6 +213,39 @@ def _init_schema(conn: sqlite3.Connection):
         CREATE INDEX IF NOT EXISTS idx_payslips_emp ON payslips(employee_id);
         CREATE INDEX IF NOT EXISTS idx_payslips_month ON payslips(month);
     """)
+
+    # =============================================
+    # SYSTEM CONFIG: runtime settings (LLM model, etc.)
+    # =============================================
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS system_config (
+            key        TEXT PRIMARY KEY,
+            value      TEXT NOT NULL,
+            updated_by TEXT,
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+    """)
+    # Seed defaults (idempotent)
+    config_defaults = [
+        ("llm_provider",    "groq"),
+        ("llm_model",       "llama-3.3-70b-versatile"),
+        ("llm_temperature", "0"),
+        ("llm_api_key",     ""),
+        ("llm_fallback_provider",    ""),
+        ("llm_fallback_model",       ""),
+        ("llm_fallback_temperature", "0"),
+        ("llm_fallback_api_key",     ""),
+        ("smtp_host",       ""),
+        ("smtp_port",       "587"),
+        ("smtp_username",   ""),
+        ("smtp_password_enc", ""),
+        ("smtp_from_email", ""),
+        ("smtp_use_tls",    "true"),
+    ]
+    conn.executemany(
+        "INSERT OR IGNORE INTO system_config (key, value) VALUES (?, ?)",
+        config_defaults,
+    )
 
     # ---------- Demo seed data (only when SEED_DEMO_DATA=true) ----------
     if os.getenv("SEED_DEMO_DATA", "").lower() != "true":
@@ -362,39 +394,6 @@ def _init_schema(conn: sqlite3.Connection):
         "INSERT OR IGNORE INTO payslips (employee_id, month, gross_salary, deductions, net_salary) "
         "VALUES (?, ?, ?, ?, ?)",
         payslip_data,
-    )
-
-    # =============================================
-    # SYSTEM CONFIG: runtime settings (LLM model, etc.)
-    # =============================================
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS system_config (
-            key        TEXT PRIMARY KEY,
-            value      TEXT NOT NULL,
-            updated_by TEXT,
-            updated_at TEXT DEFAULT (datetime('now'))
-        );
-    """)
-    # Seed defaults (idempotent)
-    config_defaults = [
-        ("llm_provider",    "groq"),
-        ("llm_model",       "llama-3.3-70b-versatile"),
-        ("llm_temperature", "0"),
-        ("llm_api_key",     ""),
-        ("llm_fallback_provider",    ""),
-        ("llm_fallback_model",       ""),
-        ("llm_fallback_temperature", "0"),
-        ("llm_fallback_api_key",     ""),
-        ("smtp_host",       ""),
-        ("smtp_port",       "587"),
-        ("smtp_username",   ""),
-        ("smtp_password_enc", ""),
-        ("smtp_from_email", ""),
-        ("smtp_use_tls",    "true"),
-    ]
-    conn.executemany(
-        "INSERT OR IGNORE INTO system_config (key, value) VALUES (?, ?)",
-        config_defaults,
     )
 
     conn.commit()
@@ -577,7 +576,7 @@ def create_ticket(summary: str, priority: str, category: str = "general", descri
         conn.execute(
             "INSERT INTO tickets (ticket_id, summary, description, priority, category, created_by, sla_hours) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (ticket_id, summary, description, priority, category, created_by or "system", sla),
+            (ticket_id, summary, description, priority, category, created_by or None, sla),
         )
         conn.commit()
 
@@ -1222,10 +1221,10 @@ def get_llm_config() -> str:
 
 @tool
 def change_llm_model(model_name: str, provider: str = "groq", temperature: float = 0.0, api_key: str = "") -> str:
-    """Change the LLM model used by all agents. provider: 'groq' or 'openrouter'.
-    model_name: e.g. 'llama-3.1-8b-instant' (groq) or 'google/gemini-2.0-flash-001' (openrouter).
-    api_key: optional — omit to keep using the environment variable (GROQ_API_KEY).
-    For openrouter, an API key is required (set via this tool or OPENROUTER_API_KEY env var)."""
+    """Change the LLM model used by all agents. provider: 'groq', 'openrouter', or 'ollama'.
+    model_name: e.g. 'llama-3.1-8b-instant' (groq), 'google/gemini-2.0-flash-001' (openrouter), or 'llama3.3:70b' (ollama).
+    api_key: optional — omit to keep using the environment variable (GROQ_API_KEY / OLLAMA_API_KEY).
+    For openrouter and ollama, an API key is required (set via this tool or the respective env var)."""
     from auth import current_user_email
     try:
         email = current_user_email.get()
@@ -1233,8 +1232,8 @@ def change_llm_model(model_name: str, provider: str = "groq", temperature: float
         email = "unknown"
 
     provider = provider.lower().strip()
-    if provider not in ("groq", "openrouter"):
-        return f"Invalid provider '{provider}'. Must be 'groq' or 'openrouter'."
+    if provider not in ("groq", "openrouter", "ollama"):
+        return f"Invalid provider '{provider}'. Must be 'groq', 'openrouter', or 'ollama'."
 
     if provider == "groq" and model_name not in GROQ_MODELS:
         valid = ", ".join(sorted(GROQ_MODELS))
@@ -1249,6 +1248,9 @@ def change_llm_model(model_name: str, provider: str = "groq", temperature: float
     # For openrouter, an API key is required (either passed or from env)
     if provider == "openrouter" and not api_key and not os.getenv("OPENROUTER_API_KEY"):
         return "OpenRouter requires an API key. Pass one via api_key parameter or set OPENROUTER_API_KEY env var."
+
+    if provider == "ollama" and not api_key and not os.getenv("OLLAMA_API_KEY"):
+        return "Ollama Cloud requires an API key. Pass one via api_key parameter or set OLLAMA_API_KEY env var."
 
     _set_system_config("llm_provider", provider, email)
     _set_system_config("llm_model", model_name, email)
@@ -1271,10 +1273,10 @@ def change_llm_model(model_name: str, provider: str = "groq", temperature: float
 
 
 @tool
-def configure_fallback_llm(model_name: str, provider: str = "groq", api_key: str = "") -> str:
+def configure_fallback_llm(model_name: str, provider: str = "ollama", api_key: str = "") -> str:
     """Configure a fallback LLM used automatically when the primary hits rate limits or errors.
-    model_name: e.g. 'llama-3.1-8b-instant' (groq) or 'google/gemini-flash-1.5' (openrouter).
-    provider: 'groq' or 'openrouter'. api_key: optional, leave empty to use env var.
+    model_name: e.g. 'llama3.3:70b' (ollama), 'llama-3.1-8b-instant' (groq), or 'google/gemini-flash-1.5' (openrouter).
+    provider: 'ollama', 'groq', or 'openrouter'. api_key: optional, leave empty to use env var (OLLAMA_API_KEY).
     To disable the fallback, call with model_name='none'."""
     from auth import current_user_email
     try:
@@ -1291,8 +1293,8 @@ def configure_fallback_llm(model_name: str, provider: str = "groq", api_key: str
         return "Fallback LLM disabled."
 
     provider = provider.lower().strip()
-    if provider not in ("groq", "openrouter"):
-        return f"Invalid provider '{provider}'. Must be 'groq' or 'openrouter'."
+    if provider not in ("groq", "openrouter", "ollama"):
+        return f"Invalid provider '{provider}'. Must be 'groq', 'openrouter', or 'ollama'."
 
     if provider == "groq" and model_name not in GROQ_MODELS:
         valid = ", ".join(sorted(GROQ_MODELS))
@@ -1306,6 +1308,9 @@ def configure_fallback_llm(model_name: str, provider: str = "groq", api_key: str
 
     if provider == "openrouter" and not api_key and not os.getenv("OPENROUTER_API_KEY"):
         return "OpenRouter requires an API key. Pass one via api_key parameter or set OPENROUTER_API_KEY env var."
+
+    if provider == "ollama" and not api_key and not os.getenv("OLLAMA_API_KEY"):
+        return "Ollama Cloud requires an API key. Pass one via api_key parameter or set OLLAMA_API_KEY env var."
 
     _set_system_config("llm_fallback_provider", provider, email)
     _set_system_config("llm_fallback_model", model_name, email)

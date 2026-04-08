@@ -33,10 +33,10 @@ _llm_config = {
     "api_key": "",  # empty = use env var
 }
 _llm_fallback_config = {
-    "provider": "",   # empty = no fallback configured
-    "model": "",
+    "provider": "ollama",
+    "model": "llama3.3:70b",
     "temperature": 0.0,
-    "api_key": "",
+    "api_key": "",  # empty = use OLLAMA_API_KEY env var
 }
 _llm_cache: dict = {}  # keyed by config fingerprint
 
@@ -54,6 +54,14 @@ def _build_llm(cfg: dict):
             temperature=cfg["temperature"],
             api_key=SecretStr(api_key) if api_key else None,
             base_url="https://openrouter.ai/api/v1",
+        )
+    elif cfg["provider"] == "ollama":
+        api_key = cfg["api_key"] or os.getenv("OLLAMA_API_KEY", "")
+        return ChatOpenAI(
+            model=cfg["model"],
+            temperature=cfg["temperature"],
+            api_key=SecretStr(api_key) if api_key else SecretStr("ollama"),
+            base_url="https://api.ollama.com/v1",
         )
     else:
         kwargs = {"model": cfg["model"], "temperature": cfg["temperature"]}
@@ -467,11 +475,12 @@ WORKER_CONFIGS = {
             "Always explain what you found and what the skill does after installing.\n\n"
             "LLM CONFIGURATION:\n"
             "- Use get_llm_config to show the current model, provider, temperature, and fallback.\n"
-            "- Use change_llm_model to switch models or providers. Supported providers: 'groq' and 'openrouter'.\n"
+            "- Use change_llm_model to switch models or providers. Supported providers: 'groq', 'openrouter', and 'ollama'.\n"
             "  - Groq models: llama-3.3-70b-versatile, llama-3.1-8b-instant, mixtral-8x7b-32768, etc.\n"
             "  - OpenRouter models: use 'provider/model' format (e.g. 'google/gemini-2.0-flash-001', 'anthropic/claude-3.5-sonnet').\n"
+            "  - Ollama Cloud models: e.g. 'llama3.3:70b', 'llama3.1:8b' (requires OLLAMA_API_KEY).\n"
             "- Use configure_fallback_llm to set a fallback LLM used automatically when the primary hits rate limits or errors.\n"
-            "  - Example: configure_fallback_llm('llama-3.1-8b-instant', provider='groq') for a lighter Groq fallback.\n"
+            "  - Example: configure_fallback_llm('llama3.3:70b', provider='ollama') for Ollama Cloud fallback.\n"
             "  - To disable: configure_fallback_llm('none').\n"
             "- If the user provides an API key, pass it to the relevant tool. Never log or repeat API keys in your response.\n"
             "- Changes take effect immediately for all users.\n\n"
