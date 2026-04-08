@@ -63,6 +63,9 @@ helm upgrade --install promtail grafana/promtail \
 # ── 4. kube-prometheus-stack (Prometheus + Grafana) ─────────────────────────
 echo ""
 echo "==> [4/4] Installing Prometheus + Grafana..."
+# Delete the Grafana datasource configmap on reinstall so stale "isDefault"
+# entries in the Grafana SQLite DB don't cause a CrashLoopBackOff.
+kubectl delete configmap kube-prometheus-stack-grafana -n "${NAMESPACE}" --ignore-not-found
 helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
   --namespace "${NAMESPACE}" \
   --values "${OBS}/kube-prometheus-stack.yaml" \
