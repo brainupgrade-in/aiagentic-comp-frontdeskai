@@ -52,6 +52,9 @@ grafana:
   sidecar:
     datasources:
       defaultDatasourceEnabled: false
+    dashboards:
+      enabled: true
+      searchNamespace: ALL   # watch ConfigMaps with grafana_dashboard=1 in all namespaces
   service:
     type: NodePort
     nodePort: 30300

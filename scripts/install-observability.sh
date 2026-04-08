@@ -18,6 +18,7 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 OBS="${REPO_DIR}/scripts/observability"
+RESOURCES="${REPO_DIR}/resources"
 NAMESPACE="monitoring"
 
 # Verify kind context
@@ -70,6 +71,19 @@ helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheu
   --namespace "${NAMESPACE}" \
   --values "${OBS}/kube-prometheus-stack.yaml" \
   --wait --timeout 5m
+
+# ── 5. FrontDesk AI App Dashboard ───────────────────────────────────────────
+echo ""
+echo "==> [5/5] Installing FrontDesk AI app health dashboard..."
+# Grafana sidecar watches ConfigMaps with label grafana_dashboard=1 in any namespace.
+# The dashboard is loaded automatically — no Grafana restart needed.
+kubectl create configmap frontdeskai-app-dashboard \
+  --namespace "${NAMESPACE}" \
+  --from-file=frontdeskai-dashboard.json="${RESOURCES}/frontdeskai-dashboard.json" \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl label configmap frontdeskai-app-dashboard \
+  --namespace "${NAMESPACE}" \
+  grafana_dashboard=1 --overwrite
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 echo ""

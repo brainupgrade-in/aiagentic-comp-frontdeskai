@@ -1,0 +1,789 @@
+{
+  "annotations": { "list": [] },
+  "description": "FrontDesk AI application health — detect pod failures, LLM errors, latency spikes, and fallbacks at a glance",
+  "editable": true,
+  "graphTooltip": 1,
+  "links": [],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": ["frontdeskai", "application"],
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "FrontDesk AI \u2014 App Health",
+  "uid": "frontdeskai-app",
+  "version": 1,
+  "panels": [
+
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Health Overview",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false
+    },
+
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Pod Status",
+      "description": "Is the FrontDesk AI pod up and being scraped by Prometheus? Red = pod down or not reachable.",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          },
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "up{app=\"frontdeskai\"}",
+          "instant": true,
+          "legendFormat": "pod"
+        }
+      ]
+    },
+
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Request Rate",
+      "description": "Chat requests per second over last 5 minutes. Zero may mean no users or app unreachable.",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "blue" },
+          "unit": "reqps",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "blue", "value": null }]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(rate(frontdeskai_request_duration_seconds_count[5m])) or vector(0)",
+          "instant": true,
+          "legendFormat": "req/s"
+        }
+      ]
+    },
+
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "LLM Error Rate",
+      "description": "LLM agent errors per second. Any value > 0 means agent failures — check error logs.",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "short",
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0.001 }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(rate(frontdeskai_agent_errors_total[5m])) or vector(0)",
+          "instant": true,
+          "legendFormat": "errors/s"
+        }
+      ]
+    },
+
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "P95 Response Time",
+      "description": "95th percentile end-to-end chat latency. Yellow > 10s, Red > 30s.",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "s",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 10 },
+              { "color": "red", "value": 30 }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum(rate(frontdeskai_request_duration_seconds_bucket[5m])) by (le)) or vector(0)",
+          "instant": true,
+          "legendFormat": "p95"
+        }
+      ]
+    },
+
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Fallback Rate",
+      "description": "LLM failure fallback responses per second. Non-zero means LLM is failing and users get canned responses.",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "short",
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.001 }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(rate(frontdeskai_fallbacks_total[5m])) or vector(0)",
+          "instant": true,
+          "legendFormat": "fallbacks/s"
+        }
+      ]
+    },
+
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Pod Restarts (1h)",
+      "description": "Container restarts in the last hour. Any restart indicates a crash — check logs.",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(increase(kube_pod_container_status_restarts_total{pod=~\"frontdeskai.*\"}[1h])) or vector(0)",
+          "instant": true,
+          "legendFormat": "restarts"
+        }
+      ]
+    },
+
+    {
+      "id": 8,
+      "type": "row",
+      "title": "Request Traffic",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "collapsed": false
+    },
+
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Request Rate",
+      "description": "Chat requests per second over time. Drops to zero = app unreachable or no users.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 15,
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(rate(frontdeskai_request_duration_seconds_count[5m]))",
+          "legendFormat": "req/s"
+        }
+      ]
+    },
+
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Response Latency (P50 / P95 / P99)",
+      "description": "End-to-end /chat/send latency percentiles. P95 > 30s = LLM is very slow or timing out.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "line+area" }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "transparent", "value": null },
+              { "color": "yellow", "value": 10 },
+              { "color": "red", "value": 30 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.50, sum(rate(frontdeskai_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum(rate(frontdeskai_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.99, sum(rate(frontdeskai_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+
+    {
+      "id": 11,
+      "type": "row",
+      "title": "LLM Health",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "collapsed": false
+    },
+
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "LLM Error Rate by Agent",
+      "description": "Errors per second per agent. Spike = API key invalid, rate limit, or model error. Correlate with error logs below.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": {
+        "legend": { "calcs": ["max", "sum"], "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "normal" },
+            "thresholdsStyle": { "mode": "off" }
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(frontdeskai_agent_errors_total[5m])",
+          "legendFormat": "{{agent}}"
+        }
+      ]
+    },
+
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "LLM Call Duration P95 by Agent",
+      "description": "Per-agent LLM latency. Slow agents indicate the LLM is sluggish or prompts are too long.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum(rate(frontdeskai_llm_call_duration_seconds_bucket[5m])) by (le, agent))",
+          "legendFormat": "{{agent}}"
+        }
+      ]
+    },
+
+    {
+      "id": 14,
+      "type": "row",
+      "title": "Agent Behavior",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
+      "collapsed": false
+    },
+
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Requests by Category",
+      "description": "Which departments are being routed to. Unexpected drop in a category may indicate routing failure.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": {
+        "legend": { "calcs": ["sum"], "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "normal" },
+            "thresholdsStyle": { "mode": "off" }
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(frontdeskai_category_total[5m])",
+          "legendFormat": "{{category}}"
+        }
+      ]
+    },
+
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Escalations & Fallbacks",
+      "description": "Escalations = complex issues passed to manager. Fallbacks = LLM failed, canned response served. Both rising = degraded service quality.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": {
+        "legend": { "calcs": ["max", "sum"], "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Fallbacks" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Escalations" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(frontdeskai_escalations_total[5m])",
+          "legendFormat": "Escalations"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(frontdeskai_fallbacks_total[5m])",
+          "legendFormat": "Fallbacks"
+        }
+      ]
+    },
+
+    {
+      "id": 17,
+      "type": "row",
+      "title": "Error Logs",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 32 },
+      "collapsed": false
+    },
+
+    {
+      "id": 18,
+      "type": "logs",
+      "title": "Recent ERROR Logs",
+      "description": "Application ERROR-level log lines. LLM failures, auth errors, and agent exceptions appear here. Click trace_id to jump to the failing trace in Tempo.",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 33 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": true,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki" },
+          "expr": "{app=\"frontdeskai\", level=\"ERROR\"}",
+          "queryType": "range"
+        }
+      ]
+    },
+
+    {
+      "id": 19,
+      "type": "row",
+      "title": "LLM Token Usage",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 43 },
+      "collapsed": false
+    },
+
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Token Consumption by Agent",
+      "description": "Tokens per second per agent. Sudden spike = runaway prompt or loop. Sustained high = approaching rate limit.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 44 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 15,
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "normal" },
+            "thresholdsStyle": { "mode": "off" }
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(frontdeskai_llm_tokens_total[5m])",
+          "legendFormat": "{{agent}}"
+        }
+      ]
+    },
+
+    {
+      "id": 21,
+      "type": "stat",
+      "title": "Total Tokens (1h)",
+      "description": "Cumulative token usage in the last hour across all agents.",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 44 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "purple" },
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "purple", "value": null }]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(increase(frontdeskai_llm_tokens_total[1h])) or vector(0)",
+          "instant": true,
+          "legendFormat": "tokens"
+        }
+      ]
+    },
+
+    {
+      "id": 22,
+      "type": "stat",
+      "title": "Total Requests (1h)",
+      "description": "Total chat requests processed in the last hour.",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 44 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "blue" },
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "blue", "value": null }]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(increase(frontdeskai_request_duration_seconds_count[1h])) or vector(0)",
+          "instant": true,
+          "legendFormat": "requests"
+        }
+      ]
+    },
+
+    {
+      "id": 23,
+      "type": "stat",
+      "title": "Total LLM Errors (1h)",
+      "description": "Cumulative LLM agent errors in the last hour.",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 48 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(increase(frontdeskai_agent_errors_total[1h])) or vector(0)",
+          "instant": true,
+          "legendFormat": "errors"
+        }
+      ]
+    },
+
+    {
+      "id": 24,
+      "type": "stat",
+      "title": "Total Escalations (1h)",
+      "description": "Requests escalated to the manager agent in the last hour.",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 48 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "yellow" },
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "yellow", "value": null }]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(increase(frontdeskai_escalations_total[1h])) or vector(0)",
+          "instant": true,
+          "legendFormat": "escalations"
+        }
+      ]
+    }
+
+  ]
+}
