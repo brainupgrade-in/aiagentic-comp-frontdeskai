@@ -52,6 +52,12 @@ apply_secret() {
     --from-literal=SECRET_KEY="$(head -c 32 /dev/urandom | base64)"
     --from-literal=AUTH_PASSWORD="${AUTH_PASSWORD}"
   )
+  if [ -n "${OLLAMA_API_KEY:-}" ]; then
+    SECRET_ARGS+=(--from-literal=OLLAMA_API_KEY="${OLLAMA_API_KEY}")
+    echo "    Ollama API key included"
+  else
+    echo "    OLLAMA_API_KEY not set — Ollama Cloud fallback will be disabled"
+  fi
   if [ -n "${LANGFUSE_SECRET_KEY:-}" ] && [ -n "${LANGFUSE_PUBLIC_KEY:-}" ] && [ -n "${LANGFUSE_HOST:-}" ]; then
     SECRET_ARGS+=(
       --from-literal=LANGFUSE_SECRET_KEY="${LANGFUSE_SECRET_KEY}"

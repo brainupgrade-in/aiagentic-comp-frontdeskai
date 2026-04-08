@@ -30,6 +30,7 @@ done < "${ENV_FILE}"
 
 GROQ_API_KEY="${GROQ_API_KEY:?ERROR: GROQ_API_KEY not set in .env}"
 AUTH_PASSWORD="${AUTH_PASSWORD:?ERROR: AUTH_PASSWORD not set in .env}"
+OLLAMA_API_KEY="${OLLAMA_API_KEY:-}"
 
 # Preserve existing SECRET_KEY to avoid breaking Fernet-encrypted values in DB
 echo "==> Preserving existing SECRET_KEY from cluster..."
@@ -48,6 +49,13 @@ SECRET_ARGS=(
   --from-literal=AUTH_PASSWORD="${AUTH_PASSWORD}"
   --from-literal=SECRET_KEY="${EXISTING_SECRET_KEY}"
 )
+
+if [ -n "${OLLAMA_API_KEY}" ]; then
+  SECRET_ARGS+=(--from-literal=OLLAMA_API_KEY="${OLLAMA_API_KEY}")
+  echo "==> Ollama API key included"
+else
+  echo "==> WARNING: OLLAMA_API_KEY not set in .env — Ollama Cloud fallback will be disabled"
+fi
 
 # Langfuse — include only if all three vars are set
 LANGFUSE_SECRET_KEY="${LANGFUSE_SECRET_KEY:-}"
