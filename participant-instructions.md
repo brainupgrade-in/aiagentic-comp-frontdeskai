@@ -2,8 +2,9 @@
 
 ## Prerequisites
 
-- GitHub Codespace created from this repo (recommended), **or** a local machine with Docker and kubectl installed
 - A Groq API key — get one free at https://console.groq.com
+- **Option A (recommended):** GitHub account to launch a Codespace
+- **Option B:** Local machine with Docker and Python 3.12+
 
 ---
 
@@ -16,9 +17,10 @@ Open the repo on GitHub → **Code → Codespaces → Create codespace on main**
 The devcontainer automatically:
 - Installs Python 3.12, kubectl, helm, kind, Docker-in-Docker
 - Creates a local kind Kubernetes cluster named `frontdeskai`
-- Installs all Python dependencies
+- Installs all Python dependencies into the system Python
+- Creates `/shared/.sqlite` for persistent storage
 
-Wait for the setup to finish (watch the terminal).
+Wait for the setup to finish (watch the terminal — it prints "Setup complete" when done).
 
 ### 2. Configure API Keys
 
@@ -33,7 +35,7 @@ cp .env.example .env
 bash scripts/deploy.sh
 ```
 
-This builds the container image, loads it into the kind cluster, creates the Kubernetes secret, and deploys the app.
+Builds the container image, loads it into the kind cluster, creates the Kubernetes secret, and deploys the app.
 
 ### 4. Access the App
 
@@ -47,7 +49,7 @@ http://localhost:8000
 ```
 
 **Login:** Any email address + password `brainupgrade`
-(First login hashes and saves the password per user — you can change it later via chat)
+(First login hashes and saves the password per user — change it later via chat)
 
 ### 5. Install Observability Stack (Optional)
 
@@ -55,17 +57,16 @@ http://localhost:8000
 bash scripts/install-observability.sh
 ```
 
-Installs Prometheus, Grafana, Loki, Promtail, and Tempo — fully correlated (metrics ↔ logs ↔ traces).
+Installs Prometheus, Grafana, Loki, Promtail, and Tempo with full 3-way correlation (metrics ↔ logs ↔ traces).
 
 ```bash
-# Access Grafana
 kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80 &
 # Open http://localhost:3000  (admin / admin)
 ```
 
 ---
 
-## Option B: Local Machine
+## Option B: Local Machine (without Kubernetes)
 
 ### 1. Clone and Configure
 
@@ -80,7 +81,7 @@ cp .env.example .env
 # Edit .env and set GROQ_API_KEY
 ```
 
-### 2. Run Locally (without Kubernetes)
+### 2. Run
 
 ```bash
 python app/app.py
@@ -90,6 +91,9 @@ python app/app.py
 ### 3. Deploy to kind (with Kubernetes)
 
 ```bash
+# Install kind (if not installed)
+curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64 && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind
+
 # Create kind cluster
 kind create cluster --name frontdeskai
 
@@ -122,9 +126,9 @@ kubectl rollout restart deployment/frontdeskai
 
 **Pod stuck in `ImagePullBackOff` or `ErrImageNeverPull`:**
 ```bash
-kubectl describe pod -l app=frontdeskai
 # Rebuild and reload the image into kind
 bash scripts/build.sh
+kubectl rollout restart deployment/frontdeskai
 ```
 
 **App not responding:**
@@ -144,4 +148,9 @@ kubectl port-forward svc/frontdeskai 8000:80 &
 kind get clusters
 # Recreate if missing
 kind create cluster --name frontdeskai
+bash scripts/deploy.sh
 ```
+
+**Codespace enters recovery mode (Docker-in-Docker fails):**
+
+Ensure the devcontainer base image is `mcr.microsoft.com/devcontainers/python:3.12-bookworm` (not `bullseye`). Delete the Codespace and create a new one to pick up the fix.
