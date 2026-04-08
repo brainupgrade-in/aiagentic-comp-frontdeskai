@@ -2,13 +2,14 @@
 # Deploy FrontDesk AI.
 # Auto-detects environment:
 #   - kind context  → local image load, port-forward for access
-#   - other context → production k3s sandbox (brainupgrade.in registry + ingress)
+#   - other context → production sandbox (brainupgrade.in registry + ingress)
 #
-# Usage: bash k8s/deploy.sh
+# Usage: bash scripts/deploy.sh
 
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+MANIFESTS="${REPO_DIR}/scripts/manifests"
 ENV_FILE="${REPO_DIR}/.env"
 CLUSTER_NAME="frontdeskai"
 LOCAL_IMAGE="frontdeskai:latest"
@@ -39,7 +40,6 @@ CURRENT_CONTEXT=$(kubectl config current-context 2>/dev/null || echo "")
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 apply_secret() {
-  local image="$1"
   echo "==> Creating secret..."
   SECRET_ARGS=(
     --from-literal=GROQ_API_KEY="${GROQ_API_KEY}"
@@ -68,12 +68,12 @@ apply_manifests() {
   DEPLOY_TMP=$(mktemp)
   trap 'rm -f "${DEPLOY_TMP}"' EXIT
   sed "s|image: frontdeskai:latest|image: ${image}|g" \
-      "${REPO_DIR}/k8s/deployment.yaml" \
+      "${MANIFESTS}/deployment.yaml" \
     | sed "s|imagePullPolicy: Never|imagePullPolicy: ${pull_policy}|g" \
     > "${DEPLOY_TMP}"
   kubectl apply -f "${DEPLOY_TMP}"
-  kubectl apply -f "${REPO_DIR}/k8s/service.yaml"
-  if kubectl apply -f "${REPO_DIR}/k8s/servicemonitor.yaml" 2>/dev/null; then
+  kubectl apply -f "${MANIFESTS}/service.yaml"
+  if kubectl apply -f "${MANIFESTS}/servicemonitor.yaml" 2>/dev/null; then
     echo "==> ServiceMonitor deployed"
   else
     echo "==> ServiceMonitor skipped (CRD not found or insufficient permissions)"
@@ -90,7 +90,7 @@ if echo "${CURRENT_CONTEXT}" | grep -q "kind"; then
   echo "==> Loading image into kind cluster '${CLUSTER_NAME}'..."
   kind load docker-image "${LOCAL_IMAGE}" --name "${CLUSTER_NAME}"
 
-  apply_secret "${LOCAL_IMAGE}"
+  apply_secret
   apply_manifests "${LOCAL_IMAGE}" "Never"
 
   echo "==> Waiting for app to be ready..."
@@ -105,7 +105,7 @@ if echo "${CURRENT_CONTEXT}" | grep -q "kind"; then
   echo "      kubectl port-forward svc/frontdeskai 9090:9090 &"
   echo "    Verify: kubectl get pods -l app=frontdeskai"
 
-# ── Production k3s sandbox (brainupgrade.in) ─────────────────────────────────
+# ── Production sandbox (brainupgrade.in) ─────────────────────────────────────
 else
   NAMESPACE=$(kubectl config get-contexts "${CURRENT_CONTEXT}" --no-headers | awk '{print $5}')
   if [ -z "${NAMESPACE}" ]; then
@@ -117,19 +117,11 @@ else
   echo "==> Namespace: ${NAMESPACE}"
   echo "==> Registry:  ${REGISTRY}"
 
-  REGISTRY_TMP=$(mktemp)
-  trap 'rm -f "${REGISTRY_TMP}"' EXIT
-  sed "s/YOURNAMESPACE/${NAMESPACE}/g" "${REPO_DIR}/k8s/registry.yaml" > "${REGISTRY_TMP}"
-
-  echo "==> Deploying private registry..."
-  kubectl apply -f "${REGISTRY_TMP}"
-  kubectl wait --for=condition=ready pod -l app=registry --timeout=120s
-
   echo "==> Building and pushing image..."
   docker build -t "${IMAGE}" -f "${REPO_DIR}/Containerfile" "${REPO_DIR}"
   docker push "${IMAGE}"
 
-  apply_secret "${IMAGE}"
+  apply_secret
   apply_manifests "${IMAGE}" "Always"
 
   echo "==> Waiting for app to be ready..."

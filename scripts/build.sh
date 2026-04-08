@@ -1,9 +1,9 @@
 #!/bin/bash
 # Build the container image and either:
 #   - Load it directly into a local kind cluster (devcontainer / Codespace), or
-#   - Push it to the per-user in-cluster registry (production k3s sandbox).
+#   - Push it to the per-user in-cluster registry (production sandbox).
 #
-# Usage: bash k8s/build-and-push.sh
+# Usage: bash scripts/build.sh
 
 set -euo pipefail
 
@@ -11,7 +11,6 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CLUSTER_NAME="frontdeskai"
 LOCAL_IMAGE="frontdeskai:latest"
 
-# Detect environment: kind vs production k3s sandbox
 CURRENT_CONTEXT=$(kubectl config current-context 2>/dev/null || echo "")
 
 if echo "${CURRENT_CONTEXT}" | grep -q "kind"; then
@@ -24,7 +23,7 @@ if echo "${CURRENT_CONTEXT}" | grep -q "kind"; then
   kind load docker-image "${LOCAL_IMAGE}" --name "${CLUSTER_NAME}"
   echo "==> Done. Image available inside kind as '${LOCAL_IMAGE}'."
 else
-  # ── Production k3s sandbox (brainupgrade.in) ──────────────────────────────
+  # ── Production sandbox (brainupgrade.in) ──────────────────────────────────
   NAMESPACE=$(kubectl config get-contexts "${CURRENT_CONTEXT}" --no-headers | awk '{print $5}')
   if [ -z "${NAMESPACE}" ]; then
     echo "ERROR: Could not detect namespace from kubectl context."
