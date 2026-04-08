@@ -119,7 +119,7 @@ class WorkerResponse(BaseModel):
     )
     needs_escalation: bool = Field(
         default=False,
-        description="Whether this request needs manager approval or escalation"
+        description="Whether this request needs manager approval or escalation. Must be a JSON boolean: true or false (not the string 'true' or 'false')"
     )
     escalation_reason: Optional[str] = Field(
         default=None,
