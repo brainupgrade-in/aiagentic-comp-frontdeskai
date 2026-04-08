@@ -1270,7 +1270,62 @@ def change_llm_model(model_name: str, provider: str = "groq", temperature: float
     )
 
 
-LLM_CONFIG_TOOLS = [get_llm_config, change_llm_model]
+@tool
+def configure_fallback_llm(model_name: str, provider: str = "groq", api_key: str = "") -> str:
+    """Configure a fallback LLM used automatically when the primary hits rate limits or errors.
+    model_name: e.g. 'llama-3.1-8b-instant' (groq) or 'google/gemini-flash-1.5' (openrouter).
+    provider: 'groq' or 'openrouter'. api_key: optional, leave empty to use env var.
+    To disable the fallback, call with model_name='none'."""
+    from auth import current_user_email
+    try:
+        email = current_user_email.get()
+    except LookupError:
+        email = "unknown"
+
+    if model_name.lower() == "none":
+        _set_system_config("llm_fallback_provider", "", email)
+        _set_system_config("llm_fallback_model", "", email)
+        _set_system_config("llm_fallback_api_key", "", email)
+        from agents import reload_llm_config
+        reload_llm_config()
+        return "Fallback LLM disabled."
+
+    provider = provider.lower().strip()
+    if provider not in ("groq", "openrouter"):
+        return f"Invalid provider '{provider}'. Must be 'groq' or 'openrouter'."
+
+    if provider == "groq" and model_name not in GROQ_MODELS:
+        valid = ", ".join(sorted(GROQ_MODELS))
+        return f"Invalid Groq model '{model_name}'. Valid models: {valid}"
+
+    if provider == "openrouter" and not _is_valid_openrouter_model(model_name):
+        return (
+            f"Invalid OpenRouter model format '{model_name}'. "
+            "Use 'provider/model' format (e.g. 'google/gemini-flash-1.5', 'anthropic/claude-3.5-haiku')."
+        )
+
+    if provider == "openrouter" and not api_key and not os.getenv("OPENROUTER_API_KEY"):
+        return "OpenRouter requires an API key. Pass one via api_key parameter or set OPENROUTER_API_KEY env var."
+
+    _set_system_config("llm_fallback_provider", provider, email)
+    _set_system_config("llm_fallback_model", model_name, email)
+    _set_system_config("llm_fallback_temperature", "0", email)
+    if api_key:
+        _set_system_config("llm_fallback_api_key", api_key, email)
+
+    from agents import reload_llm_config
+    reload_llm_config()
+
+    return (
+        f"Fallback LLM configured!\n"
+        f"  Provider: {provider}\n"
+        f"  Model:    {model_name}\n"
+        f"  API Key:  {'custom key set' if api_key else 'using env var'}\n"
+        f"The fallback will be used automatically when the primary LLM hits rate limits or errors."
+    )
+
+
+LLM_CONFIG_TOOLS = [get_llm_config, change_llm_model, configure_fallback_llm]
 
 
 # ========== SMTP / EMAIL TOOLS (skill_admin) ==========
