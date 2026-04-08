@@ -48,7 +48,10 @@ grafana:
   # Disable the chart's auto-generated Prometheus datasource — we define our
   # own below with Loki/Tempo correlation links.  Without this, two configmaps
   # both mark Prometheus as isDefault and Grafana crashes on startup.
-  defaultDatasourceEnabled: false
+  # (grafana subchart key is sidecar.datasources.defaultDatasourceEnabled)
+  sidecar:
+    datasources:
+      defaultDatasourceEnabled: false
   service:
     type: NodePort
     nodePort: 30300
