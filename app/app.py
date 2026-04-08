@@ -21,7 +21,7 @@ from rag import index_documents, POLICIES_DIR
 from skills import load_all_skills
 from tools import HISTORY_DB
 import observability as obs
-from observability import init_observability, get_metrics_app, get_tracer, get_langfuse_handler
+from observability import init_observability, get_metrics_app, get_tracer, get_langfuse_handler, set_langfuse_handler
 
 load_dotenv()
 
@@ -295,10 +295,9 @@ async def send_message(request: Request, message: str = Form(...)):
                     compiled = graph.compile(checkpointer=checkpointer)
                     config = {"configurable": {"thread_id": user}}
 
-                    # Attach Langfuse callback if configured
-                    lf_handler = get_langfuse_handler(user_id=user, session_id=user)
-                    if lf_handler:
-                        config["callbacks"] = [lf_handler]
+                    # Store Langfuse handler in ContextVar so LLM invoke calls
+                    # inside node functions can pick it up via get_lf_callbacks().
+                    set_langfuse_handler(get_langfuse_handler(user_id=user, session_id=user))
 
                     initial_state = {
                         "employee_name": employee_name,

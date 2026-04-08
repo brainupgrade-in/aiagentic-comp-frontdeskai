@@ -17,7 +17,7 @@ from langchain_core.messages import SystemMessage, AIMessage, ToolMessage
 from langgraph.graph import StateGraph, START, END
 from pydantic import BaseModel, Field, SecretStr
 
-from observability import trace_llm_call
+from observability import trace_llm_call, get_lf_callbacks
 from rag import retrieve, format_context, format_sources
 from fewshot import retrieve_examples, format_fewshot_context
 from tools import DOMAIN_TOOLS
@@ -296,7 +296,7 @@ def supervisor(state: SupportRequest) -> dict:
             request=state["request"],
         )
         with trace_llm_call("supervisor") as ctx:
-            result = get_llm_chain(Classification).invoke(prompt)
+            result = get_llm_chain(Classification).invoke(prompt, config={"callbacks": get_lf_callbacks()})
             ctx["response"] = result
         return {
             "category": result.category,
@@ -626,7 +626,7 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
                     react_iterations += 1
                     try:
                         with trace_llm_call(f"{name}_react_iter_{iteration}") as ctx:
-                            response = active_tool_llm.invoke(messages)
+                            response = active_tool_llm.invoke(messages, config={"callbacks": get_lf_callbacks()})
                             ctx["response"] = response
                     except Exception as tool_err:
                         # LLM tool-calling error (e.g. malformed tool call, rate limit)
@@ -659,7 +659,7 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
 
             # === Final structured response (with full tool context in messages) ===
             with trace_llm_call(f"{name}_worker_final") as ctx:
-                result = get_llm_chain(WorkerResponse).invoke(messages)
+                result = get_llm_chain(WorkerResponse).invoke(messages, config={"callbacks": get_lf_callbacks()})
                 ctx["response"] = result
 
             escalate = can_escalate and result.needs_escalation
@@ -786,7 +786,7 @@ def manager_agent(state: SupportRequest) -> dict:
             worker_output=state["worker_output"][:200],
         )
         with trace_llm_call("manager") as ctx:
-            response = get_llm_chain().invoke(messages)
+            response = get_llm_chain().invoke(messages, config={"callbacks": get_lf_callbacks()})
             ctx["response"] = response
         return {
             "worker_output": f"[Manager Review] {response.content.strip()}",

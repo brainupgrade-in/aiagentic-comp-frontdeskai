@@ -4,6 +4,7 @@ import json
 import logging
 import time
 from contextlib import contextmanager
+from contextvars import ContextVar  # noqa: F401 — used at runtime
 
 import os
 
@@ -208,6 +209,22 @@ def get_langfuse_handler(user_id: str = "", session_id: str = ""):
         user_id=user_id,
         session_id=session_id,
     )
+
+
+# Per-request Langfuse handler stored in a ContextVar so node functions
+# can access it without needing to pass it through every call signature.
+_langfuse_handler_var: ContextVar = ContextVar("langfuse_handler", default=None)
+
+
+def set_langfuse_handler(handler) -> None:
+    """Store the current request's Langfuse handler in the context."""
+    _langfuse_handler_var.set(handler)
+
+
+def get_lf_callbacks() -> list:
+    """Return [handler] for the current request, or [] if Langfuse is disabled."""
+    h = _langfuse_handler_var.get(None)
+    return [h] if h else []
 
 
 def get_metrics_app():
