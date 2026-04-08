@@ -8,3 +8,4 @@ __pycache__/
 app/data/.sqlite/
 app/data/.frontdeskai/
 *.db
+.claude/
