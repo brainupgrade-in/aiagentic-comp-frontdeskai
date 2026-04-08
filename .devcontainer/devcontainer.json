@@ -35,12 +35,24 @@
   "customizations": {
     "vscode": {
       "extensions": [
+        // Python
         "ms-python.python",
         "ms-python.vscode-pylance",
+        // Kubernetes + Docker
         "ms-kubernetes-tools.vscode-kubernetes-tools",
         "ms-azuretools.vscode-docker",
+        // YAML / shell / env files
         "redhat.vscode-yaml",
-        "rangav.vscode-thunder-client"
+        "timonwong.shellcheck",
+        "mikestead.dotenv",
+        // Jinja2 templates (templates/login.html)
+        "samuelcolvin.jinjahtml",
+        // SQLite viewer (history.db, frontdesk_tools.db, checkpoints.db)
+        "mtxr.sqliteviewer",
+        // API testing
+        "rangav.vscode-thunder-client",
+        // Git
+        "eamodio.gitlens"
       ],
       "settings": {
         "python.defaultInterpreterPath": "/usr/local/bin/python",
