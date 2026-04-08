@@ -49,6 +49,9 @@ grafana:
   # own below with Loki/Tempo correlation links.  Without this, two configmaps
   # both mark Prometheus as isDefault and Grafana crashes on startup.
   defaultDatasourceEnabled: false
+  service:
+    type: NodePort
+    nodePort: 30300
   resources:
     requests:
       memory: "256Mi"

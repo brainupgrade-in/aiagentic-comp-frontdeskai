@@ -5,7 +5,7 @@ metadata:
   labels:
     app: frontdeskai
 spec:
-  type: ClusterIP
+  type: NodePort
   selector:
     app: frontdeskai
   ports:
@@ -13,10 +13,12 @@ spec:
       protocol: TCP
       port: 80
       targetPort: 8000
+      nodePort: 30800
     - name: metrics
       protocol: TCP
       port: 9090
       targetPort: 8000
-# Access in kind/Codespace via port-forward:
-#   kubectl port-forward svc/frontdeskai 8000:80   → http://localhost:8000
-#   kubectl port-forward svc/frontdeskai 9090:9090 → Prometheus metrics
+      nodePort: 30900
+# Access via NodePort (no port-forward needed):
+#   http://<node-ip>:30800  → FrontDesk AI
+#   http://<node-ip>:30900  → Prometheus metrics
