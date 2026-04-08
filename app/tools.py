@@ -266,20 +266,20 @@ def _init_schema(conn: sqlite3.Connection):
 
     tickets = [
         ("TECH-1001", "VPN not connecting from home",      "Getting timeout errors when connecting via Cisco AnyConnect from home WiFi. Tried restarting the client.",
-         "P2", "In Progress", "network",   "it.support",  "priya.sharma", None, 24),
+         "P2", "In Progress", "network",   "it.support",  "priya.sharma", None, 24, "2026-02-17 09:15:00"),
         ("TECH-1002", "Need AWS console access",           "Require read access to production S3 buckets and CloudWatch logs for debugging.",
-         "P3", "Open",        "access",    None,           "amit.patel",   None, 48),
+         "P3", "Open",        "access",    None,           "amit.patel",   None, 48, "2026-02-18 11:30:00"),
         ("TECH-1003", "Laptop screen flickering",          "Dell XPS 15 screen flickers intermittently, especially when on battery power.",
-         "P3", "Open",        "hardware",  None,           "neha.gupta",   None, 48),
+         "P3", "Open",        "hardware",  None,           "neha.gupta",   None, 48, "2026-02-20 14:00:00"),
         ("TECH-1004", "Jira dashboard loading slow",       "Jira dashboards take 15+ seconds to load. Other team members reporting same issue.",
-         "P2", "Resolved",    "software",  "it.support",  "rajesh",       "2026-02-19 16:30:00", 24),
+         "P2", "Resolved",    "software",  "it.support",  "rajesh",       "2026-02-19 16:30:00", 24, "2026-02-19 10:00:00"),
         ("TECH-1005", "New joiner laptop setup",           "Need a MacBook Pro M3 setup with standard dev tools for new hire starting Feb 24.",
-         "P4", "Open",        "hardware",  None,           "anita.verma",  None, 72),
+         "P4", "Open",        "hardware",  None,           "anita.verma",  None, 72, "2026-02-21 08:45:00"),
     ]
     conn.executemany(
         "INSERT OR IGNORE INTO tickets "
-        "(ticket_id, summary, description, priority, status, category, assignee, created_by, resolved_at, sla_hours) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "(ticket_id, summary, description, priority, status, category, assignee, created_by, resolved_at, sla_hours, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         tickets,
     )
 
