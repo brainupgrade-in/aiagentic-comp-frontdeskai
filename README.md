@@ -76,6 +76,8 @@ python app/app.py             # Open http://localhost:8000
 
 See [participant-instructions.md](participant-instructions.md) for the full deployment guide including kind cluster setup and observability stack.
 
+See [user-manual.md](user-manual.md) for end-user and admin usage instructions.
+
 ### Observability Stack (Prometheus · Grafana · Loki · Promtail · Tempo)
 
 ```bash
@@ -89,8 +91,7 @@ Metrics, logs, and traces are fully correlated in Grafana — click a trace ID i
 ### Redeploy After Code Changes
 
 ```bash
-bash scripts/build.sh
-kubectl rollout restart deployment/frontdeskai
+bash scripts/deploy.sh
 ```
 
 ### Verify
@@ -104,8 +105,7 @@ kubectl logs deployment/frontdeskai
 
 | File | Description |
 |------|-------------|
-| `scripts/deploy.sh` | One-command deploy — auto-detects kind vs production sandbox |
-| `scripts/build.sh` | Build image and load into kind (or push to registry for production) |
+| `scripts/deploy.sh` | One-command deploy — build + load/push + apply manifests, auto-detects kind vs production |
 | `scripts/install-observability.sh` | Install Prometheus, Grafana, Loki, Promtail, Tempo via Helm |
 | `scripts/generate-test-traffic.sh` | Generate load to populate observability dashboards |
 | `scripts/manifests/deployment.yaml` | App deployment + 1Gi PVC + Prometheus scrape annotations |
@@ -152,6 +152,7 @@ kubectl logs deployment/frontdeskai
 | `AUTH_PASSWORD` | Shared password for first-time login | `brainupgrade` |
 | `ADMIN_EMAILS` | Comma-separated admin emails | `admin@unigps.in` |
 | `SQLITE_DIR` | SQLite database directory | `/shared/.sqlite` |
+| `SEED_DEMO_DATA` | Pre-populate demo employees, tickets, expenses, leave, rooms, payslips | `false` |
 | `LANGFUSE_PUBLIC_KEY` | Langfuse public key (optional) | — |
 | `LANGFUSE_SECRET_KEY` | Langfuse secret key (optional) | — |
 | `LANGFUSE_HOST` | Langfuse host URL (optional) | — |
