@@ -54,7 +54,8 @@ prometheus:
             target_label: app
 
 grafana:
-  adminPassword: admin
+  adminUser: agenticai
+  adminPassword: agentgrow.io
   # Disable the chart's auto-generated Prometheus datasource — we define our
   # own below with Loki/Tempo correlation links.  Without this, two configmaps
   # both mark Prometheus as isDefault and Grafana crashes on startup.
