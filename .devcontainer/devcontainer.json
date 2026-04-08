@@ -11,6 +11,10 @@
   },
 
   "features": {
+    // SSH server — enables `gh codespace ssh` and remote Claude Code access
+    "ghcr.io/devcontainers/features/sshd:1": {
+      "version": "latest"
+    },
     // Docker-in-Docker so kind can spawn cluster nodes as containers
     "ghcr.io/devcontainers/features/docker-in-docker:2": {
       "version": "latest",
