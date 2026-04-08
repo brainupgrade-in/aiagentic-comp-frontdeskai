@@ -1,30 +1,43 @@
 #!/bin/bash
-# Run this script inside the sandbox pod after cloning the repo.
-# It builds the container image and pushes to the per-user in-cluster registry.
-# Namespace is auto-detected from the current kubectl context.
+# Build the container image and either:
+#   - Load it directly into a local kind cluster (devcontainer / Codespace), or
+#   - Push it to the per-user in-cluster registry (production k3s sandbox).
+#
+# Usage: bash k8s/build-and-push.sh
 
 set -euo pipefail
 
-NAMESPACE=$(kubectl config get-contexts "$(kubectl config current-context)" --no-headers | awk '{print $5}')
-if [ -z "$NAMESPACE" ]; then
-  echo "ERROR: Could not detect namespace from kubectl context. Set a namespace in your kubeconfig."
-  exit 1
-fi
-echo "==> Detected namespace: ${NAMESPACE}"
-REGISTRY="${NAMESPACE}-registry.brainupgrade.in"
-IMAGE="${REGISTRY}/frontdeskai:latest"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+CLUSTER_NAME="frontdeskai"
+LOCAL_IMAGE="frontdeskai:latest"
 
-echo "==> Building image from ${REPO_DIR}"
-docker build -t "${IMAGE}" -f "${REPO_DIR}/Containerfile" "${REPO_DIR}"
+# Detect environment: kind vs production k3s sandbox
+CURRENT_CONTEXT=$(kubectl config current-context 2>/dev/null || echo "")
 
-echo "==> Pushing image to ${REGISTRY}"
-docker push "${IMAGE}"
+if echo "${CURRENT_CONTEXT}" | grep -q "kind"; then
+  # ── kind (devcontainer / Codespace) ───────────────────────────────────────
+  echo "==> Detected kind cluster context: ${CURRENT_CONTEXT}"
+  echo "==> Building image: ${LOCAL_IMAGE}"
+  docker build -t "${LOCAL_IMAGE}" -f "${REPO_DIR}/Containerfile" "${REPO_DIR}"
 
-echo "==> Generating k8s manifests with namespace: ${NAMESPACE}"
-echo "    Note: Source YAMLs are not modified. Use deploy.sh for full deployment."
-echo "    To apply manually:"
-echo "      sed 's/YOURNAMESPACE/${NAMESPACE}/g' k8s/deployment.yaml | kubectl apply -f -"
-echo "      sed 's/YOURNAMESPACE/${NAMESPACE}/g' k8s/registry.yaml | kubectl apply -f -"
+  echo "==> Loading image into kind cluster '${CLUSTER_NAME}'..."
+  kind load docker-image "${LOCAL_IMAGE}" --name "${CLUSTER_NAME}"
+  echo "==> Done. Image available inside kind as '${LOCAL_IMAGE}'."
+else
+  # ── Production k3s sandbox (brainupgrade.in) ──────────────────────────────
+  NAMESPACE=$(kubectl config get-contexts "${CURRENT_CONTEXT}" --no-headers | awk '{print $5}')
+  if [ -z "${NAMESPACE}" ]; then
+    echo "ERROR: Could not detect namespace from kubectl context."
+    exit 1
+  fi
+  echo "==> Detected namespace: ${NAMESPACE}"
+  REGISTRY="${NAMESPACE}-registry.brainupgrade.in"
+  IMAGE="${REGISTRY}/frontdeskai:latest"
 
-echo "==> Done."
+  echo "==> Building image: ${IMAGE}"
+  docker build -t "${IMAGE}" -f "${REPO_DIR}/Containerfile" "${REPO_DIR}"
+
+  echo "==> Pushing image to ${REGISTRY}..."
+  docker push "${IMAGE}"
+  echo "==> Done."
+fi
