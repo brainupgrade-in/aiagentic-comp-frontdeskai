@@ -106,12 +106,11 @@ cd app && python -c "from tools import DOMAIN_TOOLS; print(list(DOMAIN_TOOLS.key
 # Verify skills module
 cd app && python -c "from skills import load_all_skills; print(load_all_skills())"
 
-# Build and deploy to kind cluster
-bash scripts/build.sh        # build image + kind load
-bash scripts/deploy.sh       # deploy manifests, auto-detects kind vs production
+# Build and deploy to kind cluster (single command)
+bash scripts/deploy.sh       # build + load/push + apply manifests, auto-detects kind vs production
 
 # Redeploy after code changes (kind)
-bash scripts/build.sh && kubectl rollout restart deployment/frontdeskai
+bash scripts/deploy.sh
 
 # Update a secret/config without rebuilding the image
 kubectl patch secret frontdeskai-secret \
@@ -157,8 +156,7 @@ The full agentic cycle for adding a new capability, entirely via chat:
 
 | File | Description |
 |------|-------------|
-| `scripts/deploy.sh` | One-command deploy — auto-detects kind vs production (checks kubectl context) |
-| `scripts/build.sh` | Build image and `kind load` (kind) or `docker push` (production) |
+| `scripts/deploy.sh` | One-command deploy — build + load/push + apply manifests, auto-detects kind vs production |
 | `scripts/install-observability.sh` | Install Prometheus, Grafana, Loki, Promtail, Tempo via Helm into `monitoring` namespace |
 | `scripts/generate-test-traffic.sh` | Generate load to populate observability dashboards |
 | `scripts/manifests/deployment.yaml` | App deployment (image: `frontdeskai:latest`, imagePullPolicy: Never for kind) |
