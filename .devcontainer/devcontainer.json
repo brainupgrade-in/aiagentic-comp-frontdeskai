@@ -26,10 +26,13 @@
 
   "postCreateCommand": "bash .devcontainer/setup.sh",
 
-  "forwardPorts": [8000, 9090],
+  "forwardPorts": [8000, 9090, 3000, 5000, 4317],
   "portsAttributes": {
-    "8000": { "label": "FrontDesk AI", "onAutoForward": "openBrowser" },
-    "9090": { "label": "Prometheus" }
+    "8000": { "label": "FrontDesk AI",       "onAutoForward": "openBrowser" },
+    "9090": { "label": "Prometheus",          "onAutoForward": "notify" },
+    "3000": { "label": "Grafana",             "onAutoForward": "notify" },
+    "5000": { "label": "Docker Registry",     "onAutoForward": "silent" },
+    "4317": { "label": "OTEL/Tempo (gRPC)",   "onAutoForward": "silent" }
   },
 
   "customizations": {
