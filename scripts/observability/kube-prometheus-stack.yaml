@@ -15,12 +15,22 @@ prometheus:
       limits:
         memory: "1Gi"
         cpu: "500m"
+    # Enable exemplar storage so trace_id exemplars attached by OTel are
+    # persisted and queryable (required for Metrics → Traces drill-through).
+    enableFeatures:
+      - exemplar-storage
     # Pick up ServiceMonitors and PodMonitors from any namespace
     serviceMonitorSelectorNilUsesHelmValues: false
     podMonitorSelectorNilUsesHelmValues: false
     # Scrape pods with prometheus.io/scrape=true annotations (FrontDesk AI uses these)
     additionalScrapeConfigs:
       - job_name: kubernetes-pods
+        # OpenMetrics format is required for exemplar transport.
+        # Prometheus negotiates the highest format the target supports.
+        scrape_protocols:
+          - OpenMetricsText1.0.0
+          - OpenMetricsText0.0.1
+          - PrometheusText0.0.4
         kubernetes_sd_configs:
           - role: pod
         relabel_configs:
@@ -94,6 +104,8 @@ grafana:
 
         # Loki — logs
         # Derived field: extracts trace_id from JSON log → link to Tempo trace
+        # internalLink: true is required for Grafana to treat this as a
+        # datasource drill-through rather than an external URL.
         - name: Loki
           type: loki
           uid: loki
@@ -105,6 +117,7 @@ grafana:
                 url: "${__value.raw}"
                 datasourceUid: tempo
                 urlDisplayLabel: "View Trace in Tempo"
+                internalLink: true
 
         # Tempo — distributed traces
         # Linked back to Loki (logs for this trace) and Prometheus (metrics for this service)
@@ -114,22 +127,24 @@ grafana:
           url: http://tempo.monitoring.svc.cluster.local:3200
           jsonData:
             # Traces → Logs: click a trace span → jump to Loki logs with that trace_id
+            # Uses the indexed trace_id label (extracted by promtail) for fast lookup —
+            # avoids re-parsing JSON with | json which is slower and can miss lines.
             tracesToLogsV2:
               datasourceUid: loki
-              filterByTraceID: true
+              filterByTraceID: false
               customQuery: true
-              query: '{app="frontdeskai"} | json | trace_id="${__trace.traceId}"'
-            # Traces → Metrics: see request rate / latency alongside a trace
+              query: '{app="frontdeskai", trace_id="${__trace.traceId}"}'
+            # Traces → Metrics: shows request rate and LLM latency alongside any trace.
+            # No tag mapping — the metrics are service-scoped so no label filtering needed.
             tracesToMetrics:
               datasourceUid: prometheus
-              tags:
-                - key: app
-                  value: app
               queries:
                 - name: "Request rate"
-                  query: 'rate(frontdeskai_request_duration_seconds_count{$$__tags}[5m])'
+                  query: 'rate(frontdeskai_request_duration_seconds_count[5m])'
                 - name: "LLM latency p95"
-                  query: 'histogram_quantile(0.95, rate(frontdeskai_llm_call_duration_seconds_bucket{$$__tags}[5m]))'
+                  query: 'histogram_quantile(0.95, rate(frontdeskai_llm_call_duration_seconds_bucket[5m]))'
+                - name: "LLM errors"
+                  query: 'rate(frontdeskai_agent_errors_total[5m])'
             # Service map powered by Prometheus span metrics
             serviceMap:
               datasourceUid: prometheus

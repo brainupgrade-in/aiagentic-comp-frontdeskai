@@ -355,7 +355,7 @@ async def send_message(request: Request, message: str = Form(...)):
 
             elapsed = time.monotonic() - start
             if obs.request_duration:
-                obs.request_duration.record(elapsed)
+                obs.request_duration.record(elapsed, {"category": category})
 
             obs.logger.info(
                 "Chat request processed",
