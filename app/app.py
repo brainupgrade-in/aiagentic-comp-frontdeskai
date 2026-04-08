@@ -271,8 +271,9 @@ async def send_message(request: Request, message: str = Form(...)):
         )
         conn.commit()
 
-        # Extract employee name from email
-        employee_name = user.split("@")[0].replace(".", " ").title()
+        # Extract employee name and ID from email
+        employee_id = user.split("@")[0]
+        employee_name = employee_id.replace(".", " ").title()
 
         # Load recent conversation history for multi-turn context
         history_rows = conn.execute(
@@ -301,6 +302,7 @@ async def send_message(request: Request, message: str = Form(...)):
 
                     initial_state = {
                         "employee_name": employee_name,
+                        "employee_id": employee_id,
                         "request": message,
                         "conversation_history": conversation_history,
                         "is_admin": user in ADMIN_EMAILS,

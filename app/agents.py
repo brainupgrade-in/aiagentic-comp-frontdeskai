@@ -129,6 +129,7 @@ class WorkerResponse(BaseModel):
 
 class SupportRequest(TypedDict):
     employee_name: str
+    employee_id: str          # email prefix, e.g. "rajesh" for rajesh@unigps.in — use for tool calls
     request: str
     conversation_history: list[dict]  # prior turns: [{"role": "user"|"assistant", "content": "..."}]
     is_admin: bool  # whether the user is an admin (for skill_admin gating)
@@ -323,7 +324,13 @@ def fewshot_retrieval(state: SupportRequest) -> dict:
 WORKER_CONFIGS = {
     "hr": {
         "system_prompt": (
-            "You are UniGPS HR (Gheware UniGPS Solutions LLP).\n"
+            "You are UniGPS HR (Gheware UniGPS Solutions LLP).\n\n"
+            "IMPORTANT — for transactional requests, ALWAYS call the appropriate tool:\n"
+            "- Employee wants to APPLY for leave → call apply_leave with the employee_id shown in the prompt, "
+            "the leave_type (casual/sick/earned/wfh), start_date, end_date (YYYY-MM-DD), and reason. "
+            "Infer exact dates from relative expressions like 'next week' using today's date.\n"
+            "- Employee wants to CHECK leave balance → call get_leave_balance with the employee_id.\n"
+            "Do NOT just explain policy when the employee is making an actual request — take action.\n\n"
             "Escalate if: >10 days leave request, policy exceptions, or special cases."
         ),
         "can_escalate": True,
@@ -483,7 +490,7 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
          "{fewshot_context}\n\n"
          "{rag_context}\n\n"
          "{history}\n"
-         "Employee: {employee_name}\n"
+         "Employee: {employee_name} (employee_id: {employee_id})\n"
          "[USER_REQUEST_START]\n{request}\n[USER_REQUEST_END]"),
     ])
 
@@ -495,6 +502,7 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
                 rag_context=state.get("rag_context") or "",
                 history=format_history(state),
                 employee_name=state["employee_name"],
+                employee_id=state.get("employee_id", ""),
                 request=state["request"],
             )
 
