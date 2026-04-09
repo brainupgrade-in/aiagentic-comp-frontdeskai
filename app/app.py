@@ -21,7 +21,7 @@ from rag import index_documents, POLICIES_DIR
 from skills import load_all_skills
 from tools import HISTORY_DB
 import observability as obs
-from observability import init_observability, get_metrics_app, get_tracer, get_langfuse_handler, set_langfuse_handler
+from observability import init_observability, get_metrics_app, get_tracer, get_langfuse_handler
 
 load_dotenv()
 
@@ -293,11 +293,12 @@ async def send_message(request: Request, message: str = Form(...)):
             def run_graph():
                 with SqliteSaver.from_conn_string(CHECKPOINT_DB) as checkpointer:
                     compiled = graph.compile(checkpointer=checkpointer)
-                    config = {"configurable": {"thread_id": user}}
-
-                    # Store Langfuse handler in ContextVar so LLM invoke calls
-                    # inside node functions can pick it up via get_lf_callbacks().
-                    set_langfuse_handler(get_langfuse_handler(user_id=user, session_id=user))
+                    # Pass Langfuse handler via LangGraph RunnableConfig so it
+                    # propagates automatically to all child runnables (LLM calls).
+                    lf_handler = get_langfuse_handler(user_id=user, session_id=user)
+                    config: dict = {"configurable": {"thread_id": user}}
+                    if lf_handler:
+                        config["callbacks"] = [lf_handler]
 
                     initial_state = {
                         "employee_name": employee_name,
