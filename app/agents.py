@@ -136,13 +136,53 @@ def get_fallback_llm():
     return _llm_cache[cache_key]
 
 
-def _get_json_llm(cfg: dict):
-    """Build an Ollama LLM with format='json' enforced at the API level.
-    For non-Ollama providers, returns the standard LLM (they handle schema natively).
+def _build_schema_hint(cls) -> str:
+    """Generate a minimal JSON schema instruction from a Pydantic model."""
+    schema = cls.model_json_schema()
+    props = schema.get("properties", {})
+    parts = []
+    for k, v in props.items():
+        if "enum" in v:
+            parts.append(f'"{k}": one of {v["enum"]}')
+        elif v.get("type") == "boolean":
+            parts.append(f'"{k}": true or false')
+        elif v.get("type") == "integer":
+            mn, mx = v.get("minimum", ""), v.get("maximum", "")
+            parts.append(f'"{k}": integer {mn}-{mx}' if mn else f'"{k}": integer')
+        else:
+            parts.append(f'"{k}": string')
+    return "Output ONLY a valid JSON object with these fields: " + "; ".join(parts)
+
+
+def _ollama_structured_chain(cfg: dict, cls):
+    """Ollama chain: format=json LLM + parse_json_markdown + Pydantic.
+    Bypasses with_structured_output (which adds a verbose schema prompt that
+    confuses Ollama models into outputting explanations instead of JSON).
     """
-    if cfg["provider"] == "ollama":
-        return _build_llm({**cfg, "json_format": True})
-    return _build_llm(cfg)
+    from langchain_core.runnables import RunnableLambda
+    from langchain_core.messages import SystemMessage
+    from langchain_core.utils.json import parse_json_markdown
+    from langchain_core.exceptions import OutputParserException
+
+    llm = _build_llm({**cfg, "json_format": True})
+    hint = _build_schema_hint(cls)
+
+    def prepend_hint(messages):
+        if isinstance(messages, list):
+            return [SystemMessage(content=hint)] + messages
+        return messages
+
+    def parse(msg):
+        text = getattr(msg, "content", str(msg))
+        try:
+            data = parse_json_markdown(text)
+            return cls(**data)
+        except Exception as e:
+            raise OutputParserException(
+                f"Invalid json output: {text}", llm_output=text
+            ) from e
+
+    return RunnableLambda(prepend_hint) | llm | RunnableLambda(parse)
 
 
 def get_llm_chain(structured_output_cls=None):
@@ -156,22 +196,16 @@ def get_llm_chain(structured_output_cls=None):
     fb = get_fallback_llm()
 
     if structured_output_cls:
-        # Ollama: use format="json" at API level + json_mode parsing — the only
-        # reliable way to get schema-conformant output from Ollama models.
-        primary_chain = _get_json_llm(_llm_config).with_structured_output(
-            structured_output_cls, method="json_mode"
-        )
+        # Ollama: raw format=json + parse_json_markdown (more reliable than json_mode).
+        # Non-Ollama: use native with_structured_output (function calling).
+        def _make_chain(cfg):
+            if cfg["provider"] == "ollama":
+                return _ollama_structured_chain(cfg, structured_output_cls)
+            return _build_llm(cfg).with_structured_output(structured_output_cls)
+
+        primary_chain = _make_chain(_llm_config)
         if fb:
-            fb_chain = (
-                _get_json_llm(_llm_fallback_config).with_structured_output(
-                    structured_output_cls, method="json_mode"
-                )
-                if _llm_fallback_config["provider"] == "ollama"
-                else _get_json_llm(_llm_fallback_config).with_structured_output(
-                    structured_output_cls
-                )
-            )
-            return primary_chain.with_fallbacks([fb_chain])
+            return primary_chain.with_fallbacks([_make_chain(_llm_fallback_config)])
         return primary_chain
     else:
         if fb:
