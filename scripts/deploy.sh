@@ -105,8 +105,11 @@ if echo "${CURRENT_CONTEXT}" | grep -q "kind"; then
   apply_secret
   apply_manifests "${LOCAL_IMAGE}" "Never"
 
+  echo "==> Restarting deployment to pick up new image..."
+  kubectl rollout restart deployment/frontdeskai
+
   echo "==> Waiting for app to be ready..."
-  kubectl wait --for=condition=ready pod -l app=frontdeskai --timeout=120s
+  kubectl rollout status deployment/frontdeskai --timeout=120s
 
   echo ""
   echo "==> FrontDesk AI deployed to kind!"
@@ -133,8 +136,11 @@ else
   apply_secret
   apply_manifests "${IMAGE}" "Always"
 
+  echo "==> Restarting deployment to pick up new image..."
+  kubectl rollout restart deployment/frontdeskai
+
   echo "==> Waiting for app to be ready..."
-  kubectl wait --for=condition=ready pod -l app=frontdeskai --timeout=120s
+  kubectl rollout status deployment/frontdeskai --timeout=120s
 
   echo ""
   echo "==> FrontDesk AI deployed!"
