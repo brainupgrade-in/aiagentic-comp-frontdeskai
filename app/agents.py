@@ -319,6 +319,19 @@ SUPERVISOR_PROMPT = ChatPromptTemplate.from_messages([
      "Classify the request above into the correct department."),
 ])
 
+_VALID_CATS = {"hr", "tech", "finance", "facilities", "analytics", "account", "skill_admin", "general"}
+
+def _parse_classification_text(text: str) -> Classification | None:
+    """Regex fallback for models that output 'facilities, confidence 8' instead of JSON."""
+    t = text.lower()
+    cat = next((c for c in sorted(_VALID_CATS, key=len, reverse=True) if c in t), None)
+    if not cat:
+        return None
+    m = re.search(r'\b(10|[1-9])\b', text)
+    conf = int(m.group(1)) if m else 5
+    return Classification(category=cat, confidence=conf)  # type: ignore[arg-type]
+
+
 def supervisor(state: SupportRequest) -> dict:
     ts = datetime.now().strftime("%H:%M:%S")
     try:
@@ -328,7 +341,14 @@ def supervisor(state: SupportRequest) -> dict:
             request=state["request"],
         )
         with trace_llm_call("supervisor") as ctx:
-            result = get_llm_chain(Classification).invoke(prompt, config={"callbacks": get_lf_callbacks()})
+            try:
+                result = get_llm_chain(Classification).invoke(prompt, config={"callbacks": get_lf_callbacks()})
+            except Exception as parse_err:
+                # Model returned plain text instead of JSON — try regex extraction
+                raw = getattr(parse_err, "llm_output", "") or str(parse_err)
+                result = _parse_classification_text(raw)
+                if result is None:
+                    raise
             ctx["response"] = result
         return {
             "category": result.category,
