@@ -12,6 +12,7 @@ load_dotenv()
 
 from langchain_groq import ChatGroq
 from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import SystemMessage, AIMessage, ToolMessage
 from langgraph.graph import StateGraph, START, END
@@ -28,7 +29,7 @@ from skills import get_skill_tools
 
 _llm_config = {
     "provider": "ollama",
-    "model": "llama3.3:70b",
+    "model": "gemma4:31b",
     "temperature": 0.0,
     "api_key": "",  # empty = use OLLAMA_API_KEY env var
 }
@@ -57,11 +58,12 @@ def _build_llm(cfg: dict):
         )
     elif cfg["provider"] == "ollama":
         api_key = cfg["api_key"] or os.getenv("OLLAMA_API_KEY", "")
-        return ChatOpenAI(
+        client_kwargs = {"headers": {"Authorization": f"Bearer {api_key}"}} if api_key else {}
+        return ChatOllama(
             model=cfg["model"],
             temperature=cfg["temperature"],
-            api_key=SecretStr(api_key) if api_key else SecretStr("ollama"),
-            base_url="https://api.ollama.com/v1",
+            base_url="https://api.ollama.com",
+            client_kwargs=client_kwargs,
         )
     else:
         kwargs = {"model": cfg["model"], "temperature": cfg["temperature"]}
