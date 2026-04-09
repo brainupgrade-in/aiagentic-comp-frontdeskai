@@ -1606,7 +1606,67 @@ def get_leave_balance_from_hr_system(employee_id: str) -> str:
         )
 
 
-HR_TOOLS = [get_leave_balance_from_hr_system, get_leave_balance, apply_leave]
+@tool
+def approve_leave_via_mcp(
+    employee_id: str,
+    leave_type: str,
+    start_date: str,
+    end_date: str,
+    reason: str = "",
+) -> str:
+    """Approve a leave request and record it in the HR PostgreSQL database via MCP.
+
+    Use this tool when an employee requests leave and the HR agent decides to approve it.
+    It validates balance, records the approved request, and deducts days — all atomically.
+    leave_type must be one of: casual, sick, earned, wfh. Dates in YYYY-MM-DD format.
+    """
+    payload = json.dumps({
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+            "name": "approve_leave",
+            "arguments": {
+                "employee_id": employee_id,
+                "leave_type":  leave_type,
+                "start_date":  start_date,
+                "end_date":    end_date,
+                "reason":      reason,
+            },
+        },
+        "id": 2,
+    }).encode()
+
+    req = urllib.request.Request(
+        _MCP_LEAVE_URL,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = resp.read().decode()
+            for line in body.splitlines():
+                if line.startswith("data:"):
+                    body = line[5:].strip()
+                    break
+            result = json.loads(body)
+            if "error" in result:
+                return f"HR system error: {result['error'].get('message', result['error'])}"
+            content = result.get("result", {}).get("content", [])
+            if content:
+                return content[0].get("text", str(content[0]))
+            return str(result.get("result", "No response from HR system"))
+    except urllib.error.URLError as e:
+        return (
+            f"Could not reach HR MCP server: {e.reason}. "
+            "Falling back — try apply_leave instead."
+        )
+
+
+HR_TOOLS = [get_leave_balance_from_hr_system, approve_leave_via_mcp, get_leave_balance, apply_leave]
 TECH_TOOLS = [create_ticket, get_ticket_status, list_my_tickets]
 FINANCE_TOOLS = [get_expense_status, submit_expense_claim, get_payslip]
 FACILITIES_TOOLS = [check_room_availability, book_meeting_room]

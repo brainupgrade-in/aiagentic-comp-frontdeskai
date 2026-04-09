@@ -182,6 +182,115 @@ def get_leave_balance(employee_id: str) -> str:
 
 
 @mcp.tool()
+def approve_leave(
+    employee_id: str,
+    leave_type: str,
+    start_date: str,
+    end_date: str,
+    reason: str = "",
+) -> str:
+    """Approve a leave request and record it in the HR database.
+
+    The HR agent calls this tool after deciding the request is valid.
+    It auto-provisions the employee if they have no record, validates
+    that sufficient balance exists, then inserts an approved leave_request
+    row and deducts the days from leave_balances — all in one transaction.
+
+    Args:
+        employee_id: Username portion of the employee email.
+        leave_type:  One of: casual, sick, earned, wfh.
+        start_date:  YYYY-MM-DD format.
+        end_date:    YYYY-MM-DD format.
+        reason:      Optional reason for the leave.
+    """
+    import datetime
+
+    valid_types = ("casual", "sick", "earned", "wfh")
+    if leave_type not in valid_types:
+        return f"Invalid leave type '{leave_type}'. Must be one of: {', '.join(valid_types)}."
+
+    try:
+        start = datetime.date.fromisoformat(start_date)
+        end   = datetime.date.fromisoformat(end_date)
+    except ValueError:
+        return "Invalid date format. Use YYYY-MM-DD."
+
+    if end < start:
+        return "End date cannot be before start date."
+
+    days = (end - start).days + 1
+
+    balance_col = {
+        "casual":  "casual_leave",
+        "sick":    "sick_leave",
+        "earned":  "earned_leave",
+        "wfh":     "wfh_days",
+    }[leave_type]
+
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+
+        # Auto-provision if first-time employee
+        _ensure_employee(cur, employee_id)
+
+        # Read current balance
+        cur.execute(
+            f"SELECT {balance_col} AS balance FROM leave_balances WHERE employee_id = %s",
+            (employee_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return f"Could not read leave balance for '{employee_id}'."
+
+        available = row["balance"]
+        if days > available:
+            return (
+                f"Insufficient {leave_type} leave balance. "
+                f"Requested: {days} days, available: {available} days. Request cannot be approved."
+            )
+
+        # Insert approved leave request
+        cur.execute(
+            """
+            INSERT INTO leave_requests
+                (employee_id, leave_type, start_date, end_date, days, reason, status)
+            VALUES (%s, %s, %s, %s, %s, %s, 'approved')
+            RETURNING id
+            """,
+            (employee_id, leave_type, start_date, end_date, days, reason),
+        )
+        leave_id = cur.fetchone()["id"]
+
+        # Deduct from balance
+        cur.execute(
+            f"""
+            UPDATE leave_balances
+               SET {balance_col} = {balance_col} - %s,
+                   updated_at = NOW()
+             WHERE employee_id = %s
+            """,
+            (days, employee_id),
+        )
+
+        conn.commit()
+
+        return (
+            f"Leave approved. Reference #{leave_id}.\n"
+            f"  Employee    : {employee_id}\n"
+            f"  Type        : {leave_type.title()} Leave\n"
+            f"  Period      : {start_date} to {end_date} ({days} day{'s' if days > 1 else ''})\n"
+            f"  Reason      : {reason or '—'}\n"
+            f"  Balance left: {available - days} {leave_type} days remaining"
+        )
+    except Exception as e:
+        conn.rollback()
+        return f"Error approving leave: {e}"
+    finally:
+        conn.close()
+
+
+@mcp.tool()
 def get_leave_usage(employee_id: str) -> str:
     """Return the last 10 leave requests (all statuses) for an employee.
 
