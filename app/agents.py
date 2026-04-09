@@ -59,11 +59,13 @@ def _build_llm(cfg: dict):
     elif cfg["provider"] == "ollama":
         api_key = cfg["api_key"] or os.getenv("OLLAMA_API_KEY", "")
         client_kwargs = {"headers": {"Authorization": f"Bearer {api_key}"}} if api_key else {}
+        fmt = "json" if cfg.get("json_format") else None
         return ChatOllama(
             model=cfg["model"],
             temperature=cfg["temperature"],
             base_url="https://api.ollama.com",
             client_kwargs=client_kwargs,
+            format=fmt,
         )
     else:
         kwargs = {"model": cfg["model"], "temperature": cfg["temperature"]}
@@ -134,13 +136,13 @@ def get_fallback_llm():
     return _llm_cache[cache_key]
 
 
-def _structured_output_kwargs(provider: str) -> dict:
-    """Return the best with_structured_output kwargs for a given provider.
-    Ollama models need json_mode — they don't reliably follow function-calling schemas.
+def _get_json_llm(cfg: dict):
+    """Build an Ollama LLM with format='json' enforced at the API level.
+    For non-Ollama providers, returns the standard LLM (they handle schema natively).
     """
-    if provider == "ollama":
-        return {"method": "json_mode"}
-    return {}
+    if cfg["provider"] == "ollama":
+        return _build_llm({**cfg, "json_format": True})
+    return _build_llm(cfg)
 
 
 def get_llm_chain(structured_output_cls=None):
@@ -154,17 +156,22 @@ def get_llm_chain(structured_output_cls=None):
     fb = get_fallback_llm()
 
     if structured_output_cls:
-        primary_chain = primary.with_structured_output(
-            structured_output_cls,
-            **_structured_output_kwargs(_llm_config["provider"])
+        # Ollama: use format="json" at API level + json_mode parsing — the only
+        # reliable way to get schema-conformant output from Ollama models.
+        primary_chain = _get_json_llm(_llm_config).with_structured_output(
+            structured_output_cls, method="json_mode"
         )
         if fb:
-            return primary_chain.with_fallbacks(
-                [fb.with_structured_output(
-                    structured_output_cls,
-                    **_structured_output_kwargs(_llm_fallback_config["provider"])
-                )]
+            fb_chain = (
+                _get_json_llm(_llm_fallback_config).with_structured_output(
+                    structured_output_cls, method="json_mode"
+                )
+                if _llm_fallback_config["provider"] == "ollama"
+                else _get_json_llm(_llm_fallback_config).with_structured_output(
+                    structured_output_cls
+                )
             )
+            return primary_chain.with_fallbacks([fb_chain])
         return primary_chain
     else:
         if fb:
