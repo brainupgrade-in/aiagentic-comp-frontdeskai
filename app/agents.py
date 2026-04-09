@@ -29,7 +29,7 @@ from skills import get_skill_tools
 
 _llm_config = {
     "provider": "ollama",
-    "model": "gemma4:31b",
+    "model": "kimi-k2.5",
     "temperature": 0.0,
     "api_key": "",  # empty = use OLLAMA_API_KEY env var
 }
@@ -134,6 +134,15 @@ def get_fallback_llm():
     return _llm_cache[cache_key]
 
 
+def _structured_output_kwargs(provider: str) -> dict:
+    """Return the best with_structured_output kwargs for a given provider.
+    Ollama models need json_mode — they don't reliably follow function-calling schemas.
+    """
+    if provider == "ollama":
+        return {"method": "json_mode"}
+    return {}
+
+
 def get_llm_chain(structured_output_cls=None):
     """Return primary LLM chain (optionally with structured output) wrapped with fallback.
 
@@ -145,10 +154,16 @@ def get_llm_chain(structured_output_cls=None):
     fb = get_fallback_llm()
 
     if structured_output_cls:
-        primary_chain = primary.with_structured_output(structured_output_cls)
+        primary_chain = primary.with_structured_output(
+            structured_output_cls,
+            **_structured_output_kwargs(_llm_config["provider"])
+        )
         if fb:
             return primary_chain.with_fallbacks(
-                [fb.with_structured_output(structured_output_cls)]
+                [fb.with_structured_output(
+                    structured_output_cls,
+                    **_structured_output_kwargs(_llm_fallback_config["provider"])
+                )]
             )
         return primary_chain
     else:
