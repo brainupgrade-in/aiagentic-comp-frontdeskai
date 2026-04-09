@@ -81,7 +81,7 @@ See [user-manual.md](user-manual.md) for end-user and admin usage instructions.
 
 ```bash
 bash scripts/install-observability.sh
-# Open http://localhost:3000  (admin / admin) — NodePort, no port-forward needed
+# Open http://localhost:3000  (agenticai / agentgrow.io) — NodePort, no port-forward needed
 ```
 
 Metrics, logs, and traces are fully correlated in Grafana — click a trace ID in a log line to jump to the trace, or click a metric exemplar to see the originating trace.
@@ -99,14 +99,51 @@ kubectl get pods -l app=frontdeskai
 kubectl logs deployment/frontdeskai
 ```
 
+## MCP Demo — Employee Leave via Remote PostgreSQL
+
+FrontDesk AI includes a Model Context Protocol (MCP) demo showing how an LLM agent calls a remote HR system via the standardized MCP protocol, rather than querying a local database directly.
+
+**Architecture:**
+```
+default namespace                     postgres namespace
+─────────────────                     ──────────────────
+FrontDesk AI                          MCP Leave Server (port 8001)
+  HR Worker                 MCP/HTTP        ↓ psycopg2
+  get_leave_balance_from_hr_system ──→  PostgreSQL (port 5432)
+  (urllib JSON-RPC POST)                hr schema: employees,
+                                         leave_balances, leave_requests
+```
+
+**Deploy MCP stack (once, before or after `deploy.sh`):**
+```bash
+bash scripts/deploy-mcp.sh
+# Deploys PostgreSQL + MCP Leave Server into postgres namespace
+# Smoke-tests a live cross-namespace MCP call automatically
+```
+
+**Demo:** ask FrontDesk AI *"How many leaves do I have left?"* — the HR worker calls `get_leave_balance_from_hr_system`, which POSTs a JSON-RPC request to `http://mcp-leave.postgres.svc.cluster.local:8001/mcp`, which queries PostgreSQL and returns the live balance.
+
+**MCP transport:** `streamable-http` (stateless) — a single POST carries the JSON-RPC call and returns an SSE-formatted response. No session handshake required.
+
+See [`mcp/mcp-postgre/design.html`](mcp/mcp-postgre/design.html) for the full architecture diagram.
+
+| Path | Description |
+|------|-------------|
+| `mcp/postgre/` | PostgreSQL K8s manifests (namespace, secret, configmap with HR schema + seed data, pvc, deployment, service) |
+| `mcp/mcp-postgre/mcp_leave_server.py` | FastMCP server — `get_leave_balance()` + `get_leave_usage()` tools backed by PostgreSQL |
+| `mcp/mcp-postgre/Dockerfile` | `python:3.12-slim` image with `mcp[cli]` + `psycopg2-binary` |
+| `mcp/mcp-postgre/design.html` | Architecture design document with SVG diagrams |
+| `scripts/deploy-mcp.sh` | One-command MCP stack deploy — PostgreSQL + MCP server + smoke test |
+
 ## Scripts & Manifests
 
 | File | Description |
 |------|-------------|
 | `scripts/deploy.sh` | One-command deploy — build + load/push + apply manifests, auto-detects kind vs production; preserves existing `SECRET_KEY` to avoid breaking encrypted DB values |
+| `scripts/deploy-mcp.sh` | Deploy MCP Leave Service (PostgreSQL + MCP server) into `postgres` namespace with smoke test |
 | `scripts/install-observability.sh` | Install Prometheus, Grafana, Loki, Promtail, Tempo via Helm |
 | `scripts/generate-test-traffic.sh` | Generate load to populate observability dashboards |
-| `scripts/manifests/deployment.yaml` | App deployment + 1Gi PVC + Prometheus scrape annotations |
+| `scripts/manifests/deployment.yaml` | App deployment + 1Gi PVC + Prometheus scrape annotations + `MCP_LEAVE_URL` env |
 | `scripts/manifests/service.yaml` | NodePort service — http (80→30800), metrics (9090→30900) |
 | `scripts/manifests/secret.yaml` | Secret template — `GROQ_API_KEY`, `SECRET_KEY`, `AUTH_PASSWORD`, `OLLAMA_API_KEY`, optional Langfuse keys |
 | `scripts/manifests/servicemonitor.yaml` | ServiceMonitor for Prometheus Operator |
@@ -120,6 +157,7 @@ kubectl logs deployment/frontdeskai
 │   ├── agents.py           # LangGraph multi-agent graph (supervisor, workers, QA, escalation)
 │   ├── auth.py             # Per-user password hashing (PBKDF2) and storage
 │   ├── tools.py            # Domain tool definitions (HR, Tech, Finance, Facilities, Analytics, Account, SMTP)
+│   │                       #   └── get_leave_balance_from_hr_system — MCP client tool (JSON-RPC → MCP server)
 │   ├── skills.py           # Dynamic skill registry — load, install, list skills + web research tools
 │   ├── rag.py              # RAG pipeline — ChromaDB indexing and retrieval (ONNX embeddings, no torch)
 │   ├── observability.py    # OpenTelemetry metrics, tracing, and JSON logging
@@ -133,8 +171,19 @@ kubectl logs deployment/frontdeskai
 │   │   └── style.css       # UI styles
 │   └── data/
 │       └── policies/       # Policy markdown documents (RAG source)
+├── mcp/
+│   ├── postgre/            # PostgreSQL K8s manifests (namespace, secret, configmap, pvc, deployment, service)
+│   └── mcp-postgre/        # MCP Leave Server (FastMCP + psycopg2, streamable-http transport)
+│       ├── mcp_leave_server.py   # FastMCP server: get_leave_balance + get_leave_usage tools
+│       ├── Dockerfile            # python:3.12-slim image
+│       ├── requirements.txt      # mcp[cli] + psycopg2-binary
+│       ├── deployment.yaml       # K8s Deployment in postgres namespace
+│       ├── service.yaml          # ClusterIP :8001 — mcp-leave.postgres.svc.cluster.local
+│       └── design.html           # Architecture design document with SVG diagrams
 ├── scripts/                # Build, deploy, observability install scripts
-│   ├── manifests/          # Kubernetes manifests
+│   ├── deploy.sh           # Deploy FrontDesk AI (auto-detects kind vs production)
+│   ├── deploy-mcp.sh       # Deploy MCP Leave Service (PostgreSQL + MCP server + smoke test)
+│   ├── manifests/          # Kubernetes manifests for FrontDesk AI
 │   └── observability/      # Helm values for observability stack
 ├── .devcontainer/          # GitHub Codespaces / devcontainer config
 └── Containerfile           # Container image (python:3.13-slim)
@@ -351,5 +400,5 @@ and all services use NodePort, so ports bind directly to `localhost` in the Code
 | Service | URL | NodePort |
 |---------|-----|----------|
 | FrontDesk AI | http://localhost:8000 | 30800 |
-| Grafana | http://localhost:3000 (admin / admin) | 30300 |
+| Grafana | http://localhost:3000 (agenticai / agentgrow.io) | 30300 |
 | Prometheus | http://localhost:9090 | 30900 |

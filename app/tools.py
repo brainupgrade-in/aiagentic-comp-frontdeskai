@@ -6,15 +6,24 @@ schema, constraints, indexes, and foreign keys.
 """
 
 import os
+import json
 import sqlite3
 import smtplib
 import hashlib
 import base64
+import urllib.request
+import urllib.error
 from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 from langchain_core.tools import tool
+
+# MCP Leave Server endpoint (cross-namespace DNS in kind cluster)
+_MCP_LEAVE_URL = os.getenv(
+    "MCP_LEAVE_URL",
+    "http://mcp-leave.postgres.svc.cluster.local:8001/mcp",
+)
 
 TOOLS_DB = os.path.join(os.getenv("SQLITE_DIR", "/shared/.sqlite"), "frontdesk_tools.db")
 HISTORY_DB = os.path.join(os.getenv("SQLITE_DIR", "/shared/.sqlite"), "history.db")
@@ -1545,7 +1554,59 @@ FILE_TOOLS = [read_local_file, write_local_file]
 
 # ========== TOOL REGISTRY ==========
 
-HR_TOOLS = [get_leave_balance, apply_leave]
+@tool
+def get_leave_balance_from_hr_system(employee_id: str) -> str:
+    """Get an employee's leave balance from the HR system (PostgreSQL via MCP server).
+
+    This tool calls the remote HR MCP server which reads from the company's
+    PostgreSQL HR database — use this for accurate, real-time leave data.
+
+    Args:
+        employee_id: Username portion of the employee email
+                     (e.g. 'alice' for alice@unigps.in).
+    """
+    payload = json.dumps({
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+            "name": "get_leave_balance",
+            "arguments": {"employee_id": employee_id},
+        },
+        "id": 1,
+    }).encode()
+
+    req = urllib.request.Request(
+        _MCP_LEAVE_URL,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = resp.read().decode()
+            # streamable-http may return SSE lines; extract first data line
+            for line in body.splitlines():
+                if line.startswith("data:"):
+                    body = line[5:].strip()
+                    break
+            result = json.loads(body)
+            if "error" in result:
+                return f"HR system error: {result['error'].get('message', result['error'])}"
+            content = result.get("result", {}).get("content", [])
+            if content:
+                return content[0].get("text", str(content[0]))
+            return str(result.get("result", "No data returned from HR system"))
+    except urllib.error.URLError as e:
+        return (
+            f"Could not reach HR MCP server at {_MCP_LEAVE_URL}: {e.reason}. "
+            "Falling back — try get_leave_balance instead."
+        )
+
+
+HR_TOOLS = [get_leave_balance_from_hr_system, get_leave_balance, apply_leave]
 TECH_TOOLS = [create_ticket, get_ticket_status, list_my_tickets]
 FINANCE_TOOLS = [get_expense_status, submit_expense_claim, get_payslip]
 FACILITIES_TOOLS = [check_room_availability, book_meeting_room]

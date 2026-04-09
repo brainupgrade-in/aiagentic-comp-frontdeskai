@@ -169,7 +169,19 @@ def _ollama_structured_chain(cfg: dict, cls):
 
     def prepend_hint(messages):
         if isinstance(messages, list):
-            return [SystemMessage(content=hint)] + messages
+            # Insert the schema hint as the first SystemMessage.
+            # Ministral/Mistral reject 'system' after 'tool' messages, so find
+            # the last system message position and insert after it (before any
+            # human/ai/tool messages), or insert at position 0 if none exist.
+            from langchain_core.messages import SystemMessage as SM
+            hint_msg = SM(content=hint)
+            # Find the insertion point: after the last existing SystemMessage
+            last_sys = -1
+            for i, m in enumerate(messages):
+                if isinstance(m, SM):
+                    last_sys = i
+            insert_at = last_sys + 1  # 0 if no system messages, else after last one
+            return messages[:insert_at] + [hint_msg] + messages[insert_at:]
         return messages
 
     def parse(msg):
@@ -470,7 +482,9 @@ WORKER_CONFIGS = {
             "- Employee wants to APPLY for leave → call apply_leave with the employee_id shown in the prompt, "
             "the leave_type (casual/sick/earned/wfh), start_date, end_date (YYYY-MM-DD), and reason. "
             "Infer exact dates from relative expressions like 'next week' using today's date.\n"
-            "- Employee wants to CHECK leave balance → call get_leave_balance with the employee_id.\n"
+            "- Employee wants to CHECK leave balance → call get_leave_balance_from_hr_system first "
+            "(reads from the company HR PostgreSQL database via MCP). "
+            "Fall back to get_leave_balance only if the MCP tool returns an error.\n"
             "Do NOT just explain policy when the employee is making an actual request — take action.\n\n"
             "Escalate if: >10 days leave request, policy exceptions, or special cases."
         ),
@@ -486,6 +500,11 @@ WORKER_CONFIGS = {
             "- Employee asks about a specific ticket → call get_ticket_status with the ticket_id.\n"
             "- Employee asks to list their tickets → call list_my_tickets with the employee_id.\n"
             "Do NOT just describe the process — create the ticket when asked.\n\n"
+            "OCI COMPUTE (if oci_* tools are available):\n"
+            "- Employee asks to list/view OCI instances → call oci_list_instances(lifecycle_state)\n"
+            "- Employee asks about a specific instance → call oci_get_instance(instance_id)\n"
+            "- Employee asks to restart/stop/start an instance → call oci_instance_action(instance_id, action)\n"
+            "Always call the OCI tool directly — do NOT describe it or write the tool name in brackets.\n\n"
             "Escalate if: P1 severity (production down, data loss, security breach)."
         ),
         "can_escalate": True,
@@ -697,12 +716,14 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
             if active_tools:
                 primary_tool_llm = get_llm().bind_tools(active_tools)
                 fb = get_fallback_llm()
+                fallback_tool_llm = fb.bind_tools(active_tools) if fb else None
                 active_tool_llm = (
-                    primary_tool_llm.with_fallbacks([fb.bind_tools(active_tools)])
-                    if fb else primary_tool_llm
+                    primary_tool_llm.with_fallbacks([fallback_tool_llm])
+                    if fallback_tool_llm else primary_tool_llm
                 )
             else:
                 active_tool_llm = None
+                fallback_tool_llm = None
 
             tool_calls_log = []
             react_iterations = 0
@@ -725,8 +746,17 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
                         break
 
                     if not response.tool_calls:
-                        # Agent decided it has enough info — move to final response
-                        break
+                        # Primary LLM didn't emit tool calls — retry once with fallback LLM
+                        if iteration == 0 and fallback_tool_llm and fallback_tool_llm is not active_tool_llm:
+                            try:
+                                with trace_llm_call(f"{name}_react_iter_{iteration}_fb") as ctx:
+                                    response = fallback_tool_llm.invoke(messages)
+                                    ctx["response"] = response
+                            except Exception:
+                                pass  # fallback also failed — proceed to final response
+                        if not response.tool_calls:
+                            # Agent (or fallback) decided it has enough info — move to final response
+                            break
 
                     # ACT: Execute tool calls
                     messages.append(response)
@@ -738,8 +768,10 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
 
                     # OBSERVE: Log what happened (LLM sees tool results on next iteration)
                 else:
-                    # Max iterations exhausted — add a nudge to wrap up
-                    messages.append(SystemMessage(content=(
+                    # Max iterations exhausted — add a nudge to wrap up.
+                    # Use HumanMessage so Mistral/Ministral don't reject 'system' after 'tool'.
+                    from langchain_core.messages import HumanMessage as HM
+                    messages.append(HM(content=(
                         "You have reached the maximum number of tool calls. "
                         "Summarize what you found so far and provide the best answer you can."
                     )))

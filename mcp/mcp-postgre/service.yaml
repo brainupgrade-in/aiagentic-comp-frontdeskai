@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-leave
+  namespace: postgres
+  labels:
+    app: mcp-leave
+spec:
+  selector:
+    app: mcp-leave
+  ports:
+    - name: mcp-http
+      port: 8001
+      targetPort: 8001
+  type: ClusterIP
+# Reachable cross-namespace via:
+#   http://mcp-leave.postgres.svc.cluster.local:8001/mcp

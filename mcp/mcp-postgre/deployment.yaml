@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-leave
+  namespace: postgres
+  labels:
+    app: mcp-leave
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-leave
+  template:
+    metadata:
+      labels:
+        app: mcp-leave
+    spec:
+      containers:
+        - name: mcp-leave
+          image: mcp-leave:latest
+          imagePullPolicy: Never          # kind cluster: loaded via `kind load docker-image`
+          ports:
+            - containerPort: 8001
+          env:
+            - name: PG_HOST
+              value: "postgres.postgres.svc.cluster.local"
+            - name: PG_PORT
+              value: "5432"
+            - name: PG_DB
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_DB
+            - name: PG_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_USER
+            - name: PG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_PASSWORD
+            - name: MCP_PORT
+              value: "8001"
+          readinessProbe:
+            tcpSocket:
+              port: 8001
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"

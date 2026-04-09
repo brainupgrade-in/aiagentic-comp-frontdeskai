@@ -22,18 +22,39 @@ Requires `OLLAMA_API_KEY` (primary) and optionally `GROQ_API_KEY` (fallback) in 
 
 ### GitHub Codespace / kind cluster
 
+Codespace: devcontainer auto-provisions the kind cluster via `.devcontainer/setup.sh`.
+
 ```bash
 cp .env.example .env          # set OLLAMA_API_KEY + GROQ_API_KEY
 bash scripts/deploy.sh        # build + load into kind + deploy + rollout restart
 # Open http://localhost:8000  (NodePort 30800 — no port-forward needed)
 ```
 
+### cloud-labs / localhost (kind)
+
+```bash
+bash scripts/create-kind-cluster.sh   # one-time: creates kind cluster 'frontdeskai' + /shared/.sqlite
+cp .env.example .env                  # set OLLAMA_API_KEY + GROQ_API_KEY
+bash scripts/deploy.sh                # same command as Codespace — auto-detects kind context
+# Open http://localhost:8000  (NodePort 30800 — no port-forward needed)
+```
+
+**Host prerequisite — passwordless sudo** (required by `create-kind-cluster.sh`):
+```bash
+echo "$USER ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/$USER
+```
+
+**Host prerequisite — inotify limits** (required for Promtail — add to `/etc/sysctl.conf` for persistence):
+```bash
+sudo sysctl fs.inotify.max_user_instances=512
+sudo sysctl fs.inotify.max_user_watches=524288
+```
+
 ### Observability stack (optional)
 
 ```bash
 bash scripts/install-observability.sh
-kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80 &
-# Open http://localhost:3000  (admin / admin)
+# Open http://localhost:3000  (agenticai / agentgrow.io) — NodePort 30300, no port-forward needed
 ```
 
 ## Architecture
@@ -56,10 +77,13 @@ app/
 | `app/app.py` | FastAPI routes: login, chat, KB management, analytics API, admin gates |
 | `app/agents.py` | LangGraph StateGraph: supervisor, 8 domain workers, QA, manager, fallback. Dynamic LLM factory (`get_llm()`) supports Ollama Cloud, Groq, and OpenRouter providers |
 | `app/auth.py` | Password hashing (PBKDF2-SHA256, 600k iter), `users` table, `current_user_email` ContextVar |
-| `app/tools.py` | LangChain `@tool` functions for each domain + schema/seed data |
+| `app/tools.py` | LangChain `@tool` functions for each domain + schema/seed data. HR tools include `get_leave_balance_from_hr_system` (MCP client) as the primary leave tool |
 | `app/skills.py` | Dynamic skill registry: load/install/list/configure skills, web research tools, `skill_config()` helper, runtime tool injection |
 | `app/rag.py` | ChromaDB indexing of `app/data/policies/*.md`, retrieval with category filtering (ONNX embeddings, no torch) |
 | `app/observability.py` | OpenTelemetry metrics, Prometheus exporter, JSON logging, Langfuse integration |
+| `mcp/mcp-postgre/mcp_leave_server.py` | FastMCP server (streamable-http, port 8001) — `get_leave_balance` + `get_leave_usage` tools backed by PostgreSQL |
+| `mcp/postgre/configmap-init.yaml` | PostgreSQL init SQL — HR schema + 4 seed employees with leave data |
+| `scripts/deploy-mcp.sh` | Deploy MCP stack (PostgreSQL + MCP server) into `postgres` namespace, includes smoke test |
 
 ## Agent Categories
 
@@ -160,15 +184,41 @@ The full agentic cycle for adding a new capability, entirely via chat:
 6. **Configure** — Admin sets API keys via `set_skill_config` → encrypted in `system_config` DB
 7. **Execute** — Domain workers get skill tools injected at invocation time, `skill_config()` reads config from DB
 
+## MCP Leave Service
+
+Employee leave queries are handled by a remote MCP server in the `postgres` namespace backed by PostgreSQL.
+
+```
+default namespace                        postgres namespace
+─────────────────                        ──────────────────
+HR Worker                    MCP/HTTP    MCP Leave Server (:8001)
+get_leave_balance_from_hr_system  ──────→  FastMCP · streamable-http
+(urllib JSON-RPC POST)                         ↓ psycopg2
+                                         PostgreSQL (:5432)
+                                         hr schema · seed data
+```
+
+**Deploy:** `bash scripts/deploy-mcp.sh` (PostgreSQL + MCP server + smoke test)
+
+**MCP_LEAVE_URL:** `http://mcp-leave.postgres.svc.cluster.local:8001/mcp` — set as env var in `scripts/manifests/deployment.yaml`
+
+**Transport:** `streamable-http` (stateless) — no session handshake, single POST per tool call.
+
+**Key settings applied in `mcp_leave_server.py`:**
+- `mcp.settings.stateless_http = True` — no session ID required per call
+- `TransportSecuritySettings(enable_dns_rebinding_protection=False)` — allows K8s pod-to-pod DNS
+
 ## Scripts & Manifests
 
 | File | Description |
 |------|-------------|
+| `scripts/create-kind-cluster.sh` | One-time localhost/cloud-labs setup — creates kind cluster `frontdeskai` with NodePort mappings + `/shared/.sqlite`; equivalent of `.devcontainer/setup.sh` for non-Codespace hosts |
 | `scripts/deploy.sh` | One-command deploy — build + load/push + apply manifests + rollout restart, auto-detects kind vs production; preserves existing `SECRET_KEY` to avoid breaking encrypted DB values |
+| `scripts/deploy-mcp.sh` | Deploy MCP Leave Service — PostgreSQL + MCP server into `postgres` namespace + smoke test |
 | `scripts/update-secret.sh` | Update K8s secret from `.env` without rebuilding image (preserves SECRET_KEY, includes OLLAMA_API_KEY + GROQ_API_KEY + Langfuse) |
 | `scripts/install-observability.sh` | Install Prometheus, Grafana, Loki, Promtail, Tempo via Helm into `monitoring` namespace |
 | `scripts/generate-test-traffic.sh` | Generate load to populate observability dashboards |
-| `scripts/manifests/deployment.yaml` | App deployment (image: `frontdeskai:latest`, imagePullPolicy: Never for kind) |
+| `scripts/manifests/deployment.yaml` | App deployment (image: `frontdeskai:latest`, imagePullPolicy: Never for kind) + `MCP_LEAVE_URL` env |
 | `scripts/manifests/service.yaml` | NodePort service — http(80→30800), metrics(9090→30900) |
 | `scripts/manifests/secret.yaml` | Secret template — `GROQ_API_KEY`, `SECRET_KEY`, `AUTH_PASSWORD`, `OLLAMA_API_KEY`, optional Langfuse keys |
 | `scripts/manifests/servicemonitor.yaml` | ServiceMonitor for Prometheus Operator |
@@ -177,16 +227,27 @@ The full agentic cycle for adding a new capability, entirely via chat:
 | `scripts/observability/promtail.yaml` | Promtail Helm values — JSON log parsing, trace_id label extraction |
 | `scripts/observability/kube-prometheus-stack.yaml` | Grafana + Prometheus Helm values — datasources with full 3-way correlation |
 
-## Deployment — kind cluster (Codespace / local)
+## Deployment — kind cluster (Codespace / cloud-labs / local)
 
-The devcontainer (`.devcontainer/`) provisions a kind cluster named `frontdeskai` automatically:
+**Cluster name:** always `frontdeskai`. Both setup paths converge on this name so `deploy.sh` works unchanged.
+
+**Codespace** — devcontainer (`.devcontainer/`) provisions automatically:
 - Base image: `mcr.microsoft.com/devcontainers/python:3.12-bookworm` (Bookworm required — Bullseye has expired Yarn GPG key that breaks Docker-in-Docker install)
 - Features: `docker-in-docker:2`, `kubectl-helm-minikube:1`
 - `postCreateCommand`: `.devcontainer/setup.sh` — installs kind binary, pip deps, creates cluster, creates `/shared/.sqlite`
 
-`scripts/deploy.sh` auto-detects environment via `kubectl config current-context`:
-- **kind**: `imagePullPolicy=Never`, `kind load docker-image` (no registry needed)
+**cloud-labs / localhost** — run once manually:
+```bash
+bash scripts/create-kind-cluster.sh   # creates cluster + /shared/.sqlite, uses $USER for chown
+```
+
+**`scripts/deploy.sh`** auto-detects environment via `kubectl config current-context`:
+- **kind** (context contains `kind`): `imagePullPolicy=Never`, `kind load docker-image --name frontdeskai`
 - **production**: `imagePullPolicy=Always`, pushes to `${NAMESPACE}-registry.brainupgrade.in`
+
+**Known host issues (cloud-labs):**
+- `sudo` prompts: add user to `/etc/sudoers.d/$USER` with `NOPASSWD:ALL`
+- Promtail `CrashLoopBackOff` (`too many open files`): bump inotify limits — `fs.inotify.max_user_instances=512`, `fs.inotify.max_user_watches=524288`; add to `/etc/sysctl.conf` for persistence
 
 ## Observability Stack
 

@@ -1,0 +1,85 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init-sql
+  namespace: postgres
+data:
+  init.sql: |
+    -- =============================================
+    -- HR Schema: employees, leave_balances, leave_requests
+    -- =============================================
+
+    CREATE TABLE IF NOT EXISTS employees (
+        employee_id   TEXT PRIMARY KEY,
+        full_name     TEXT NOT NULL,
+        email         TEXT NOT NULL UNIQUE,
+        department    TEXT NOT NULL DEFAULT 'general',
+        designation   TEXT NOT NULL DEFAULT 'Employee',
+        date_of_join  DATE NOT NULL DEFAULT CURRENT_DATE,
+        is_active     BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at    TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS leave_balances (
+        employee_id   TEXT PRIMARY KEY REFERENCES employees(employee_id) ON DELETE CASCADE,
+        casual_leave  INTEGER NOT NULL DEFAULT 12 CHECK(casual_leave >= 0),
+        sick_leave    INTEGER NOT NULL DEFAULT 6  CHECK(sick_leave >= 0),
+        earned_leave  INTEGER NOT NULL DEFAULT 15 CHECK(earned_leave >= 0),
+        wfh_days      INTEGER NOT NULL DEFAULT 24 CHECK(wfh_days >= 0),
+        year          INTEGER NOT NULL DEFAULT EXTRACT(YEAR FROM NOW())::INTEGER,
+        updated_at    TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS leave_requests (
+        id            SERIAL PRIMARY KEY,
+        employee_id   TEXT NOT NULL REFERENCES employees(employee_id) ON DELETE CASCADE,
+        leave_type    TEXT NOT NULL CHECK(leave_type IN ('casual','sick','earned','wfh')),
+        start_date    DATE NOT NULL,
+        end_date      DATE NOT NULL,
+        days          INTEGER NOT NULL CHECK(days > 0),
+        reason        TEXT NOT NULL DEFAULT '',
+        status        TEXT NOT NULL DEFAULT 'pending'
+                      CHECK(status IN ('pending','approved','rejected','cancelled')),
+        approved_by   TEXT REFERENCES employees(employee_id),
+        created_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at    TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_leave_req_emp    ON leave_requests(employee_id);
+    CREATE INDEX IF NOT EXISTS idx_leave_req_status ON leave_requests(status);
+    CREATE INDEX IF NOT EXISTS idx_leave_req_dates  ON leave_requests(start_date, end_date);
+
+    -- =============================================
+    -- Seed Data: 4 demo employees
+    -- =============================================
+
+    INSERT INTO employees (employee_id, full_name, email, department, designation, date_of_join)
+    VALUES
+      ('alice',   'Alice Johnson',    'alice@unigps.in',   'Engineering',  'Senior Engineer',  '2022-03-15'),
+      ('bob',     'Bob Martinez',     'bob@unigps.in',     'HR',           'HR Manager',       '2021-06-01'),
+      ('carol',   'Carol Singh',      'carol@unigps.in',   'Finance',      'Finance Analyst',  '2023-01-10'),
+      ('dave',    'Dave Patel',       'dave@unigps.in',    'Engineering',  'DevOps Engineer',  '2020-11-20')
+    ON CONFLICT (employee_id) DO NOTHING;
+
+    INSERT INTO leave_balances (employee_id, casual_leave, sick_leave, earned_leave, wfh_days, year)
+    VALUES
+      ('alice',  8, 4, 12, 18, 2026),
+      ('bob',   10, 6,  9, 22, 2026),
+      ('carol',  5, 2, 14, 16, 2026),
+      ('dave',  11, 5, 10, 20, 2026)
+    ON CONFLICT (employee_id) DO NOTHING;
+
+    -- Alice: took 4 casual + 2 sick + 3 earned leave
+    INSERT INTO leave_requests (employee_id, leave_type, start_date, end_date, days, reason, status)
+    VALUES
+      ('alice', 'casual', '2026-01-06', '2026-01-09', 4, 'Personal work',      'approved'),
+      ('alice', 'sick',   '2026-02-10', '2026-02-11', 2, 'Fever',              'approved'),
+      ('alice', 'earned', '2026-03-03', '2026-03-05', 3, 'Family vacation',    'approved'),
+      ('alice', 'wfh',    '2026-04-07', '2026-04-11', 5, 'Home renovation',    'approved'),
+      -- Bob: pending leave request
+      ('bob',   'casual', '2026-04-14', '2026-04-16', 3, 'Wedding attendance', 'pending'),
+      -- Dave: rejected
+      ('dave',  'earned', '2026-01-20', '2026-01-24', 5, 'Holiday trip',       'rejected'),
+      ('dave',  'casual', '2026-02-17', '2026-02-17', 1, 'Personal work',      'approved')
+    ON CONFLICT DO NOTHING;
