@@ -47,9 +47,20 @@ CURRENT_CONTEXT=$(kubectl config current-context 2>/dev/null || echo "")
 # ── Helpers ──────────────────────────────────────────────────────────────────
 apply_secret() {
   echo "==> Creating secret..."
+
+  # Preserve existing SECRET_KEY to avoid breaking Fernet-encrypted DB values
+  EXISTING_SECRET_KEY=$(kubectl get secret frontdeskai-secret \
+    -o jsonpath='{.data.SECRET_KEY}' 2>/dev/null | base64 -d || echo "")
+  if [ -z "${EXISTING_SECRET_KEY}" ]; then
+    echo "    No existing SECRET_KEY — generating a new one"
+    EXISTING_SECRET_KEY="$(head -c 32 /dev/urandom | base64)"
+  else
+    echo "    SECRET_KEY preserved from existing secret"
+  fi
+
   SECRET_ARGS=(
     --from-literal=GROQ_API_KEY="${GROQ_API_KEY}"
-    --from-literal=SECRET_KEY="$(head -c 32 /dev/urandom | base64)"
+    --from-literal=SECRET_KEY="${EXISTING_SECRET_KEY}"
     --from-literal=AUTH_PASSWORD="${AUTH_PASSWORD}"
   )
   if [ -n "${OLLAMA_API_KEY:-}" ]; then

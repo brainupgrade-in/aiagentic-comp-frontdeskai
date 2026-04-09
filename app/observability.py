@@ -18,7 +18,12 @@ from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.trace import StatusCode
 from prometheus_client import make_asgi_app
 
-from langfuse.callback import CallbackHandler as LangfuseCallbackHandler
+try:
+    from langfuse.callback import CallbackHandler as LangfuseCallbackHandler
+    _langfuse_available = True
+except ImportError:
+    LangfuseCallbackHandler = None  # type: ignore[assignment,misc]
+    _langfuse_available = False
 
 
 # ── JSON Log Formatter ──────────────────────────────────────────────
@@ -135,11 +140,13 @@ def init_observability():
     log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
     root.setLevel(getattr(logging, log_level, logging.INFO))
 
-    # Langfuse — enabled only when all three env vars are set
+    # Langfuse — enabled only when library is available and all three env vars are set
     lf_secret = os.environ.get("LANGFUSE_SECRET_KEY", "")
     lf_public = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
     lf_host = os.environ.get("LANGFUSE_HOST", "")
-    if lf_secret and lf_public and lf_host:
+    if not _langfuse_available:
+        root.info("Langfuse disabled (langfuse package not installed)")
+    elif lf_secret and lf_public and lf_host:
         langfuse_enabled = True
         root.info("Langfuse enabled", extra={"langfuse_host": lf_host})
     else:
@@ -200,10 +207,10 @@ def trace_llm_call(agent_name: str):
 def get_langfuse_handler(user_id: str = "", session_id: str = ""):
     """Create a Langfuse callback handler for a single request.
 
-    Returns None if Langfuse is not configured.
+    Returns None if Langfuse is not configured or not available.
     Each invocation creates a fresh handler so traces are grouped per request.
     """
-    if not langfuse_enabled:
+    if not langfuse_enabled or LangfuseCallbackHandler is None:
         return None
     return LangfuseCallbackHandler(
         user_id=user_id,

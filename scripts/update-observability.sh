@@ -114,4 +114,4 @@ case "${TARGET}" in
 esac
 
 echo ""
-echo "==> Done. Grafana: http://localhost:3000  (agenticai / agentgrow.io)"
+echo "==> Done. Grafana: http://localhost:3000  (admin / admin)"

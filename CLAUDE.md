@@ -164,13 +164,13 @@ The full agentic cycle for adding a new capability, entirely via chat:
 
 | File | Description |
 |------|-------------|
-| `scripts/deploy.sh` | One-command deploy — build + load/push + apply manifests + rollout restart, auto-detects kind vs production |
+| `scripts/deploy.sh` | One-command deploy — build + load/push + apply manifests + rollout restart, auto-detects kind vs production; preserves existing `SECRET_KEY` to avoid breaking encrypted DB values |
 | `scripts/update-secret.sh` | Update K8s secret from `.env` without rebuilding image (preserves SECRET_KEY, includes OLLAMA_API_KEY + GROQ_API_KEY + Langfuse) |
 | `scripts/install-observability.sh` | Install Prometheus, Grafana, Loki, Promtail, Tempo via Helm into `monitoring` namespace |
 | `scripts/generate-test-traffic.sh` | Generate load to populate observability dashboards |
 | `scripts/manifests/deployment.yaml` | App deployment (image: `frontdeskai:latest`, imagePullPolicy: Never for kind) |
 | `scripts/manifests/service.yaml` | NodePort service — http(80→30800), metrics(9090→30900) |
-| `scripts/manifests/secret.yaml` | Secret template for API keys |
+| `scripts/manifests/secret.yaml` | Secret template — `GROQ_API_KEY`, `SECRET_KEY`, `AUTH_PASSWORD`, `OLLAMA_API_KEY`, optional Langfuse keys |
 | `scripts/manifests/servicemonitor.yaml` | ServiceMonitor for Prometheus Operator |
 | `scripts/observability/tempo.yaml` | Tempo Helm values — OTLP gRPC (4317) + HTTP (4318) receivers |
 | `scripts/observability/loki.yaml` | Loki Helm values — SingleBinary, filesystem storage |

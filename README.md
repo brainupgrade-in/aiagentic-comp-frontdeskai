@@ -103,12 +103,12 @@ kubectl logs deployment/frontdeskai
 
 | File | Description |
 |------|-------------|
-| `scripts/deploy.sh` | One-command deploy — build + load/push + apply manifests, auto-detects kind vs production |
+| `scripts/deploy.sh` | One-command deploy — build + load/push + apply manifests, auto-detects kind vs production; preserves existing `SECRET_KEY` to avoid breaking encrypted DB values |
 | `scripts/install-observability.sh` | Install Prometheus, Grafana, Loki, Promtail, Tempo via Helm |
 | `scripts/generate-test-traffic.sh` | Generate load to populate observability dashboards |
 | `scripts/manifests/deployment.yaml` | App deployment + 1Gi PVC + Prometheus scrape annotations |
 | `scripts/manifests/service.yaml` | NodePort service — http (80→30800), metrics (9090→30900) |
-| `scripts/manifests/secret.yaml` | Secret template for API keys |
+| `scripts/manifests/secret.yaml` | Secret template — `GROQ_API_KEY`, `SECRET_KEY`, `AUTH_PASSWORD`, `OLLAMA_API_KEY`, optional Langfuse keys |
 | `scripts/manifests/servicemonitor.yaml` | ServiceMonitor for Prometheus Operator |
 | `scripts/observability/` | Helm values for the full observability stack |
 

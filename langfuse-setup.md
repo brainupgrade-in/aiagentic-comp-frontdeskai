@@ -49,22 +49,29 @@ Each `llm.invoke()` call through `ChatGroq` triggers the callback, which sends:
 **`app/observability.py`** — Initialization and handler factory:
 
 ```python
-from langfuse.callback import CallbackHandler as LangfuseCallbackHandler
+try:
+    from langfuse.callback import CallbackHandler as LangfuseCallbackHandler
+    _langfuse_available = True
+except ImportError:
+    LangfuseCallbackHandler = None
+    _langfuse_available = False
 
-langfuse_enabled = False  # Set True during init if env vars present
+langfuse_enabled = False  # Set True during init if library available and env vars present
 
 def init_observability():
     # ... OTel setup ...
 
-    # Langfuse — enabled only when all three env vars are set
+    # Langfuse — enabled only when library is available and all three env vars are set
     lf_secret = os.environ.get("LANGFUSE_SECRET_KEY", "")
     lf_public = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
     lf_host = os.environ.get("LANGFUSE_HOST", "")
-    if lf_secret and lf_public and lf_host:
+    if not _langfuse_available:
+        root.info("Langfuse disabled (langfuse package not installed)")
+    elif lf_secret and lf_public and lf_host:
         langfuse_enabled = True
 
 def get_langfuse_handler(user_id="", session_id=""):
-    if not langfuse_enabled:
+    if not langfuse_enabled or LangfuseCallbackHandler is None:
         return None
     return LangfuseCallbackHandler(
         user_id=user_id,
@@ -97,7 +104,7 @@ result = compiled.invoke(initial_state, config)
 | `LANGFUSE_PUBLIC_KEY` | Yes | `pk-lf-04cea526-...` | Langfuse project public key |
 | `LANGFUSE_HOST` | Yes | `https://cloud.langfuse.com` | Langfuse server URL |
 
-All three must be set for Langfuse to activate. If any are missing, the app runs normally without Langfuse (no errors, no warnings beyond a startup log).
+All three must be set for Langfuse to activate. If any are missing, or if the `langfuse` package is unavailable, the app starts normally without Langfuse — no errors, just a startup log line indicating the reason.
 
 ### Getting Langfuse Keys
 
@@ -467,7 +474,11 @@ This is why Langfuse is essential for agentic AI systems: **traditional observab
 
 ### "Langfuse disabled" in startup logs
 
-All three env vars must be non-empty:
+Check which reason is logged:
+
+- `"Langfuse disabled (langfuse package not installed)"` — the `langfuse` library is missing from the environment. Verify `pip install langfuse==2.51.3` ran successfully (it is in `app/requirements.txt`).
+- `"Langfuse disabled (LANGFUSE_SECRET_KEY/PUBLIC_KEY/HOST not set)"` — all three env vars must be non-empty:
+
 ```bash
 kubectl get secret frontdeskai-secret -o jsonpath='{.data.LANGFUSE_SECRET_KEY}' | base64 -d
 kubectl get secret frontdeskai-secret -o jsonpath='{.data.LANGFUSE_PUBLIC_KEY}' | base64 -d
