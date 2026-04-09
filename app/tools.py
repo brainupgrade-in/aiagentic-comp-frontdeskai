@@ -227,12 +227,12 @@ def _init_schema(conn: sqlite3.Connection):
     """)
     # Seed defaults (idempotent)
     config_defaults = [
-        ("llm_provider",    "groq"),
-        ("llm_model",       "llama-3.3-70b-versatile"),
+        ("llm_provider",    "ollama"),
+        ("llm_model",       "llama3.3:70b"),
         ("llm_temperature", "0"),
         ("llm_api_key",     ""),
-        ("llm_fallback_provider",    ""),
-        ("llm_fallback_model",       ""),
+        ("llm_fallback_provider",    "groq"),
+        ("llm_fallback_model",       "llama-3.3-70b-versatile"),
         ("llm_fallback_temperature", "0"),
         ("llm_fallback_api_key",     ""),
         ("smtp_host",       ""),
@@ -1192,8 +1192,8 @@ def _decrypt_value(ciphertext: str) -> str:
 @tool
 def get_llm_config() -> str:
     """Get the current LLM configuration (primary and fallback)."""
-    provider = _get_system_config("llm_provider") or "groq"
-    model = _get_system_config("llm_model") or "llama-3.3-70b-versatile"
+    provider = _get_system_config("llm_provider") or "ollama"
+    model = _get_system_config("llm_model") or "llama3.3:70b"
     temp = _get_system_config("llm_temperature") or "0"
     api_key = _get_system_config("llm_api_key") or ""
     key_status = f"custom key configured ({_mask_api_key(api_key)})" if api_key else "using environment variable"

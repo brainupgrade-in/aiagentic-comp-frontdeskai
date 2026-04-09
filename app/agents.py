@@ -27,16 +27,16 @@ from skills import get_skill_tools
 # --- Dynamic LLM Configuration ---
 
 _llm_config = {
-    "provider": "groq",
-    "model": "llama-3.3-70b-versatile",
-    "temperature": 0.0,
-    "api_key": "",  # empty = use env var
-}
-_llm_fallback_config = {
     "provider": "ollama",
     "model": "llama3.3:70b",
     "temperature": 0.0,
     "api_key": "",  # empty = use OLLAMA_API_KEY env var
+}
+_llm_fallback_config = {
+    "provider": "groq",
+    "model": "llama-3.3-70b-versatile",
+    "temperature": 0.0,
+    "api_key": "",  # empty = use GROQ_API_KEY env var
 }
 _llm_cache: dict = {}  # keyed by config fingerprint
 
