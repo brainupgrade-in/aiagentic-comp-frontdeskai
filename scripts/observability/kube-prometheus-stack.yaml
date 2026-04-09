@@ -166,15 +166,4 @@ grafana:
           options:
             path: /var/lib/grafana/dashboards/frontdeskai
 
-  dashboards:
-    frontdeskai:
-      # Kubernetes cluster overview (pre-built)
-      kubernetes-cluster:
-        gnetId: 7249
-        revision: 1
-        datasource: Prometheus
-      # Loki log explorer
-      loki-logs:
-        gnetId: 13639
-        revision: 2
-        datasource: Loki
+  dashboards: {}
