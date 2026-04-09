@@ -2,7 +2,8 @@
 
 ## Prerequisites
 
-- A Groq API key — get one free at https://console.groq.com
+- An **Ollama Cloud API key** (primary LLM) — sign up at https://ollama.com
+- A **Groq API key** (fallback LLM, recommended) — free tier at https://console.groq.com
 - **Option A (recommended):** GitHub account to launch a Codespace
 - **Option B:** Local machine with Docker and Python 3.12+
 
@@ -26,7 +27,7 @@ Wait for the setup to finish (watch the terminal — it prints "Setup complete" 
 
 ```bash
 cp .env.example .env
-# Edit .env and set your GROQ_API_KEY
+# Edit .env — set OLLAMA_API_KEY (required) and GROQ_API_KEY (recommended fallback)
 ```
 
 ### 3. Deploy the App
@@ -76,7 +77,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r app/requirements.txt
 
 cp .env.example .env
-# Edit .env and set GROQ_API_KEY
+# Edit .env — set OLLAMA_API_KEY (required) and GROQ_API_KEY (recommended fallback)
 ```
 
 ### 2. Run
@@ -128,8 +129,14 @@ kubectl logs deployment/frontdeskai
 ## Redeploy After Code Changes
 
 ```bash
-bash scripts/build.sh
-kubectl rollout restart deployment/frontdeskai
+bash scripts/deploy.sh
+```
+
+## Update API Keys Only (no image rebuild)
+
+```bash
+# Edit .env with new keys, then:
+bash scripts/update-secret.sh
 ```
 
 ---
@@ -139,15 +146,17 @@ kubectl rollout restart deployment/frontdeskai
 **Pod stuck in `ImagePullBackOff` or `ErrImageNeverPull`:**
 ```bash
 # Rebuild and reload the image into kind
-bash scripts/build.sh
-kubectl rollout restart deployment/frontdeskai
+bash scripts/deploy.sh
 ```
 
-**App not responding:**
+**App not responding / 401 Unauthorized errors:**
 ```bash
-kubectl logs deployment/frontdeskai
-# Check the secret has the API key
+kubectl logs deployment/frontdeskai | grep -i "error\|unauthorized"
+# Check the secret has both API keys
+kubectl get secret frontdeskai-secret -o jsonpath='{.data.OLLAMA_API_KEY}' | base64 -d
 kubectl get secret frontdeskai-secret -o jsonpath='{.data.GROQ_API_KEY}' | base64 -d
+# If missing, update from .env:
+bash scripts/update-secret.sh
 ```
 
 **kind cluster not found:**

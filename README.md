@@ -33,14 +33,14 @@ User Request → Supervisor (LLM classifier)
 - Per-user password storage (PBKDF2-HMAC-SHA256, 600k iterations)
 - Chat-based password change via the Account agent
 - Dynamic skill installation with per-skill configuration (API keys, secrets encrypted at rest)
-- Admin-configurable LLM model & provider (Groq/OpenRouter) via chat — persists across restarts
+- Admin-configurable LLM model & provider (Ollama Cloud / Groq / OpenRouter) + automatic fallback via chat — persists across restarts
 - Admin-configurable SMTP email — configure and send emails via chat (encrypted password storage)
 - Admin analytics dashboard with visual UI and chat-based tools
 - Knowledge base management (upload/delete policy docs)
 - Prompt injection guardrails (delimiter-wrapped user input)
 - Security headers, input validation
 
-**Stack:** FastAPI + LangGraph + Groq/OpenRouter (admin-configurable) + SQLite + ChromaDB + OpenTelemetry
+**Stack:** FastAPI + LangGraph + Ollama Cloud / Groq / OpenRouter (admin-configurable) + SQLite + ChromaDB + OpenTelemetry
 
 **Observability:** Prometheus metrics + structured JSON logs (Loki) + distributed tracing + Langfuse (optional)
 
@@ -55,8 +55,8 @@ Open the repo on GitHub → **Code → Codespaces → Create codespace on main**
 The devcontainer auto-installs Python, kubectl, helm, kind, and spins up a local Kubernetes cluster. When ready:
 
 ```bash
-cp .env.example .env          # set GROQ_API_KEY
-bash scripts/deploy.sh        # build + deploy to kind
+cp .env.example .env          # set OLLAMA_API_KEY (primary) + GROQ_API_KEY (fallback)
+bash scripts/deploy.sh        # build + deploy to kind + rollout restart
 # Open http://localhost:8000  (NodePort — no port-forward needed)
 ```
 
@@ -69,7 +69,7 @@ cd aiagentic-comp-frontdeskai
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r app/requirements.txt
 
-cp .env.example .env          # set GROQ_API_KEY
+cp .env.example .env          # set OLLAMA_API_KEY (primary) + GROQ_API_KEY (fallback)
 python app/app.py             # Open http://localhost:8000
 ```
 
@@ -144,8 +144,9 @@ kubectl logs deployment/frontdeskai
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `GROQ_API_KEY` | Groq API key for LLM access | (required for Groq provider) |
-| `OPENROUTER_API_KEY` | OpenRouter API key (if using OpenRouter provider) | — |
+| `OLLAMA_API_KEY` | Ollama Cloud API key — primary LLM (`api.ollama.com`) | (required) |
+| `GROQ_API_KEY` | Groq API key — fallback LLM | (recommended) |
+| `OPENROUTER_API_KEY` | OpenRouter API key (if switching to OpenRouter provider) | — |
 | `SECRET_KEY` | JWT signing secret | Auto-generated per session (required in production) |
 | `AUTH_PASSWORD` | Shared password for first-time login | `brainupgrade` |
 | `ADMIN_EMAILS` | Comma-separated admin emails | `admin@unigps.in` |
@@ -245,17 +246,20 @@ def get_weather(city: str) -> str:
 
 ## LLM Configuration
 
-Admins can change the LLM model, provider, and API key at runtime via chat — no restart needed.
+Admins can change the LLM model, provider, API key, and fallback at runtime via chat — no restart needed.
 
 **Supported providers:**
-- **Groq** (default): `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `mixtral-8x7b-32768`, etc.
+- **Ollama Cloud** (primary default): `gemma4:31b`, `qwen3-next:80b`, `deepseek-v3.1:671b`, etc. — hosted at `api.ollama.com`
+- **Groq** (fallback default): `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `mixtral-8x7b-32768`, etc.
 - **OpenRouter**: Access 100+ models via `provider/model` format (e.g. `google/gemini-2.0-flash-001`, `anthropic/claude-3.5-sonnet`)
 
 **Admin commands via chat:**
-- *"What model are we using?"* — shows current provider, model, temperature, API key status
-- *"Change model to llama-3.1-8b-instant"* — switches Groq model
-- *"Switch to OpenRouter with google/gemini-2.0-flash-001 and API key sk-or-..."* — switches provider + model + key
-- *"Update the API key to gsk_..."* — updates only the API key
+- *"What model are we using?"* — shows current provider, model, temperature, fallback, and API key status
+- *"Switch to qwen3-next:80b on ollama"* — switches Ollama Cloud model
+- *"Change model to llama-3.1-8b-instant on groq"* — switches provider + model
+- *"Switch to OpenRouter with google/gemini-2.0-flash-001 and API key sk-or-..."* — switches to OpenRouter
+- *"Set fallback to groq llama-3.1-8b-instant"* — configures fallback LLM
+- *"Disable fallback"* — removes fallback
 
 Settings persist in the `system_config` table and survive restarts.
 

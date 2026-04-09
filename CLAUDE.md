@@ -2,7 +2,9 @@
 
 ## Project Overview
 
-FrontDesk AI is a self-evolving agentic AI employee support desk built with FastAPI, LangGraph, and Groq/OpenRouter LLMs. It routes employee chat requests through a supervisor agent to domain-specific workers (HR, Tech, Finance, Facilities, Analytics, Account, Skill Admin), with RAG-powered policy retrieval, tool-calling, QA checks, and escalation handling.
+FrontDesk AI is a self-evolving agentic AI employee support desk built with FastAPI, LangGraph, and Ollama Cloud/Groq/OpenRouter LLMs. It routes employee chat requests through a supervisor agent to domain-specific workers (HR, Tech, Finance, Facilities, Analytics, Account, Skill Admin), with RAG-powered policy retrieval, tool-calling, QA checks, and escalation handling.
+
+**Primary LLM:** Ollama Cloud (`api.ollama.com`) — `gemma4:31b` via `ChatOllama` (`langchain-ollama`). Groq (`llama-3.3-70b-versatile`) is the automatic fallback.
 
 **What makes it agentic:** The system teaches itself new capabilities at runtime — admins describe a skill in plain English, and the system researches APIs, writes Python code, validates it, installs it to disk, configures it (API keys encrypted in DB), and executes it via domain workers. Everything persists across restarts with zero rebuild. Skills, config, LLM provider, and SMTP settings are all managed through conversation.
 
@@ -16,15 +18,14 @@ python app/app.py
 # Open http://localhost:8000
 ```
 
-Requires `GROQ_API_KEY` in `.env` file.
+Requires `OLLAMA_API_KEY` (primary) and optionally `GROQ_API_KEY` (fallback) in `.env`.
 
 ### GitHub Codespace / kind cluster
 
 ```bash
-cp .env.example .env          # set GROQ_API_KEY
-bash scripts/deploy.sh        # build + load into kind + deploy
-kubectl port-forward svc/frontdeskai 8000:80 &
-# Open http://localhost:8000
+cp .env.example .env          # set OLLAMA_API_KEY + GROQ_API_KEY
+bash scripts/deploy.sh        # build + load into kind + deploy + rollout restart
+# Open http://localhost:8000  (NodePort 30800 — no port-forward needed)
 ```
 
 ### Observability stack (optional)
@@ -53,7 +54,7 @@ app/
 | File | Purpose |
 |------|---------|
 | `app/app.py` | FastAPI routes: login, chat, KB management, analytics API, admin gates |
-| `app/agents.py` | LangGraph StateGraph: supervisor, 8 domain workers, QA, manager, fallback. Dynamic LLM factory (`get_llm()`) supports Groq and OpenRouter providers |
+| `app/agents.py` | LangGraph StateGraph: supervisor, 8 domain workers, QA, manager, fallback. Dynamic LLM factory (`get_llm()`) supports Ollama Cloud, Groq, and OpenRouter providers |
 | `app/auth.py` | Password hashing (PBKDF2-SHA256, 600k iter), `users` table, `current_user_email` ContextVar |
 | `app/tools.py` | LangChain `@tool` functions for each domain + schema/seed data |
 | `app/skills.py` | Dynamic skill registry: load/install/list/configure skills, web research tools, `skill_config()` helper, runtime tool injection |
@@ -67,7 +68,7 @@ app/
 - **hr/tech/finance/facilities**: Route through RAG retrieval, then domain worker with tools
 - **analytics**: Bypasses RAG, goes directly to analytics worker with analytics tools
 - **account**: Bypasses RAG, goes directly to account worker with `change_my_password` tool
-- **skill_admin**: Bypasses RAG, admin-only (non-admins routed to general). Tools: `search_web`, `fetch_webpage`, `install_skill`, `list_skills`, `set_skill_config`, `get_skill_config`, `get_llm_config`, `change_llm_model`, `configure_smtp`, `get_smtp_config`, `send_email`. Workers also get dynamically-injected skill tools matching their category. Admins can change the LLM model, provider (groq/openrouter), API key, SMTP email settings, and per-skill configuration at runtime via chat.
+- **skill_admin**: Bypasses RAG, admin-only (non-admins routed to general). Tools: `search_web`, `fetch_webpage`, `install_skill`, `list_skills`, `set_skill_config`, `get_skill_config`, `get_llm_config`, `change_llm_model`, `configure_fallback_llm`, `configure_smtp`, `get_smtp_config`, `send_email`. Workers also get dynamically-injected skill tools matching their category. Admins can change the LLM model, provider (ollama/groq/openrouter), API key, fallback LLM, SMTP email settings, and per-skill configuration at runtime via chat.
 - **general**: Static response, no tools
 
 ## Databases & Storage — Zero-Rebuild Persistence
@@ -129,19 +130,24 @@ kubectl logs deployment/frontdeskai
 
 | Variable | Required | Default |
 |----------|----------|---------|
-| `GROQ_API_KEY` | Yes (for Groq) | — |
-| `OPENROUTER_API_KEY` | No (for OpenRouter) | — |
+| `OLLAMA_API_KEY` | Yes (primary LLM) | — sign up at https://ollama.com |
+| `GROQ_API_KEY` | Recommended (fallback LLM) | — sign up at https://console.groq.com |
+| `OPENROUTER_API_KEY` | No (alternative provider) | — |
 | `SECRET_KEY` | Production | Auto-generated in dev (also used to derive SMTP password encryption key — if rotated, admin must re-run `configure_smtp`) |
 | `AUTH_PASSWORD` | No | `brainupgrade` |
 | `ADMIN_EMAILS` | No | `admin@unigps.in` |
 | `SQLITE_DIR` | No | `/shared/.sqlite` |
 | `SEED_DEMO_DATA` | No | `false` — set to `true` to pre-populate employees, tickets, expenses, leave, rooms, payslips for demos |
 
-Note: All runtime configuration is managed through chat (stored in `system_config` table, persists across restarts with zero rebuild): LLM model/provider/API key, SMTP email settings, and per-skill configuration (API keys, base URLs, etc.). SMTP password and secret skill config values are encrypted with Fernet (derived from `SECRET_KEY`).
+**LLM defaults (overridable at runtime via admin chat):**
+- Primary: `ollama` / `gemma4:31b` (Ollama Cloud — `https://api.ollama.com`)
+- Fallback: `groq` / `llama-3.3-70b-versatile` (auto-used on primary failure)
+
+Note: All runtime configuration is managed through chat (stored in `system_config` table, persists across restarts with zero rebuild): LLM model/provider/API key, fallback LLM, SMTP email settings, and per-skill configuration (API keys, base URLs, etc.). SMTP password and secret skill config values are encrypted with Fernet (derived from `SECRET_KEY`).
 
 **Updating API keys — two options (no image rebuild required):**
-1. **Zero-downtime via admin chat** — login as admin and say `update groq api key to <key>`; the `skill_admin` worker saves it to DB and hot-reloads immediately.
-2. **K8s secret patch + restart** — `kubectl patch secret frontdeskai-secret --type=merge -p '{"stringData":{"GROQ_API_KEY":"<key>"}}'` then `kubectl rollout restart deployment/frontdeskai`.
+1. **Zero-downtime via admin chat** — login as admin and say `update ollama api key to <key>`; the `skill_admin` worker saves it to DB and hot-reloads immediately.
+2. **Script** — `bash scripts/update-secret.sh` reads all keys from `.env`, patches the K8s secret, and restarts the pod.
 
 ## Agentic Loop (Self-Teaching)
 
@@ -158,7 +164,8 @@ The full agentic cycle for adding a new capability, entirely via chat:
 
 | File | Description |
 |------|-------------|
-| `scripts/deploy.sh` | One-command deploy — build + load/push + apply manifests, auto-detects kind vs production |
+| `scripts/deploy.sh` | One-command deploy — build + load/push + apply manifests + rollout restart, auto-detects kind vs production |
+| `scripts/update-secret.sh` | Update K8s secret from `.env` without rebuilding image (preserves SECRET_KEY, includes OLLAMA_API_KEY + GROQ_API_KEY + Langfuse) |
 | `scripts/install-observability.sh` | Install Prometheus, Grafana, Loki, Promtail, Tempo via Helm into `monitoring` namespace |
 | `scripts/generate-test-traffic.sh` | Generate load to populate observability dashboards |
 | `scripts/manifests/deployment.yaml` | App deployment (image: `frontdeskai:latest`, imagePullPolicy: Never for kind) |
