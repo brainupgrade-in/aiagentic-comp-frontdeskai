@@ -71,9 +71,22 @@ update_dashboard() {
   echo "    URL: /d/frontdeskai-app"
 }
 
+update_correlations() {
+  echo "==> Updating Grafana correlations (global drill-through links)..."
+  kubectl create configmap frontdeskai-correlations \
+    --namespace "${NAMESPACE}" \
+    --from-file=correlations.yaml="${OBS}/grafana-correlations.yaml" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl label configmap frontdeskai-correlations \
+    --namespace "${NAMESPACE}" \
+    grafana_correlation=1 --overwrite
+  echo "    Correlations ConfigMap applied — Grafana sidecar will reload within ~30s"
+}
+
 update_grafana() {
   update_prometheus
   update_dashboard
+  update_correlations
 }
 
 # ── Dispatch ─────────────────────────────────────────────────────────────────
@@ -84,16 +97,18 @@ case "${TARGET}" in
     update_promtail
     update_prometheus
     update_dashboard
+    update_correlations
     ;;
-  grafana)    update_grafana ;;
-  dashboard)  update_dashboard ;;
-  prometheus) update_prometheus ;;
-  loki)       update_loki ;;
-  promtail)   update_promtail ;;
-  tempo)      update_tempo ;;
+  grafana)      update_grafana ;;
+  dashboard)    update_dashboard ;;
+  correlations) update_correlations ;;
+  prometheus)   update_prometheus ;;
+  loki)         update_loki ;;
+  promtail)     update_promtail ;;
+  tempo)        update_tempo ;;
   *)
     echo "ERROR: Unknown target '${TARGET}'"
-    echo "Usage: $0 [all|grafana|dashboard|prometheus|loki|promtail|tempo]"
+    echo "Usage: $0 [all|grafana|dashboard|correlations|prometheus|loki|promtail|tempo]"
     exit 1
     ;;
 esac

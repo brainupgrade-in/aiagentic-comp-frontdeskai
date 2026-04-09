@@ -66,6 +66,10 @@ grafana:
     dashboards:
       enabled: true
       searchNamespace: ALL   # watch ConfigMaps with grafana_dashboard=1 in all namespaces
+    # Correlations sidecar: watches ConfigMaps with grafana_correlation=1 label
+    correlations:
+      enabled: true
+      searchNamespace: ALL
   service:
     type: NodePort
     nodePort: 30300

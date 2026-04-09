@@ -74,9 +74,7 @@ helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheu
 
 # ── 5. FrontDesk AI App Dashboard ───────────────────────────────────────────
 echo ""
-echo "==> [5/5] Installing FrontDesk AI app health dashboard..."
-# Grafana sidecar watches ConfigMaps with label grafana_dashboard=1 in any namespace.
-# The dashboard is loaded automatically — no Grafana restart needed.
+echo "==> [5/6] Installing FrontDesk AI app health dashboard..."
 kubectl create configmap frontdeskai-app-dashboard \
   --namespace "${NAMESPACE}" \
   --from-file=frontdeskai-dashboard.json="${RESOURCES}/frontdeskai-dashboard.json" \
@@ -84,6 +82,17 @@ kubectl create configmap frontdeskai-app-dashboard \
 kubectl label configmap frontdeskai-app-dashboard \
   --namespace "${NAMESPACE}" \
   grafana_dashboard=1 --overwrite
+
+# ── 6. Grafana Correlations ──────────────────────────────────────────────────
+echo ""
+echo "==> [6/6] Installing Grafana correlations (global drill-through links)..."
+kubectl create configmap frontdeskai-correlations \
+  --namespace "${NAMESPACE}" \
+  --from-file=correlations.yaml="${OBS}/grafana-correlations.yaml" \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl label configmap frontdeskai-correlations \
+  --namespace "${NAMESPACE}" \
+  grafana_correlation=1 --overwrite
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 echo ""

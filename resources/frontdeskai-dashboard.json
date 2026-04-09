@@ -3,7 +3,35 @@
   "description": "FrontDesk AI application health — detect pod failures, LLM errors, latency spikes, and fallbacks at a glance",
   "editable": true,
   "graphTooltip": 1,
-  "links": [],
+  "links": [
+    {
+      "title": "Error Logs",
+      "type": "link",
+      "icon": "bolt",
+      "tooltip": "Open Loki error logs for the current time range",
+      "url": "/explore?orgId=1&left={\"datasource\":\"loki\",\"queries\":[{\"expr\":\"{app=\\\"frontdeskai\\\",level=\\\"ERROR\\\"} | json\",\"refId\":\"A\"}],\"range\":{\"from\":\"${__from}\",\"to\":\"${__to}\"}}",
+      "keepTime": false,
+      "targetBlank": false
+    },
+    {
+      "title": "All Logs",
+      "type": "link",
+      "icon": "file-alt",
+      "tooltip": "Open all app logs in Loki for the current time range",
+      "url": "/explore?orgId=1&left={\"datasource\":\"loki\",\"queries\":[{\"expr\":\"{app=\\\"frontdeskai\\\"} | json\",\"refId\":\"A\"}],\"range\":{\"from\":\"${__from}\",\"to\":\"${__to}\"}}",
+      "keepTime": false,
+      "targetBlank": false
+    },
+    {
+      "title": "Traces",
+      "type": "link",
+      "icon": "graph-bar",
+      "tooltip": "Open Tempo traces for the current time range",
+      "url": "/explore?orgId=1&left={\"datasource\":\"tempo\",\"queries\":[{\"queryType\":\"traceql\",\"query\":\"{ resource.service.name = \\\"frontdeskai\\\" }\",\"refId\":\"A\"}],\"range\":{\"from\":\"${__from}\",\"to\":\"${__to}\"}}",
+      "keepTime": false,
+      "targetBlank": false
+    }
+  ],
   "refresh": "30s",
   "schemaVersion": 38,
   "tags": ["frontdeskai", "application"],
@@ -129,7 +157,13 @@
               { "color": "red", "value": 0.001 }
             ]
           },
-          "mappings": []
+          "mappings": [],
+          "links": [
+            {
+              "title": "View error logs",
+              "url": "/explore?orgId=1&left={\"datasource\":\"loki\",\"queries\":[{\"expr\":\"{app=\\\"frontdeskai\\\",level=\\\"ERROR\\\"} | json\",\"refId\":\"A\"}],\"range\":{\"from\":\"${__from}\",\"to\":\"${__to}\"}}"
+            }
+          ]
         },
         "overrides": []
       },
@@ -253,7 +287,13 @@
               { "color": "red", "value": 1 }
             ]
           },
-          "mappings": []
+          "mappings": [],
+          "links": [
+            {
+              "title": "View crash logs",
+              "url": "/explore?orgId=1&left={\"datasource\":\"loki\",\"queries\":[{\"expr\":\"{app=\\\"frontdeskai\\\"} | json\",\"refId\":\"A\"}],\"range\":{\"from\":\"${__from}\",\"to\":\"${__to}\"}}"
+            }
+          ]
         },
         "overrides": []
       },
@@ -317,7 +357,7 @@
       "id": 10,
       "type": "timeseries",
       "title": "Response Latency (P50 / P95 / P99)",
-      "description": "End-to-end /chat/send latency percentiles. P95 > 30s = LLM is very slow or timing out.",
+      "description": "End-to-end /chat/send latency percentiles. P95 > 30s = LLM is very slow or timing out. Click any data point to view traces.",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "options": {
@@ -328,6 +368,12 @@
         "defaults": {
           "color": { "mode": "palette-classic" },
           "unit": "s",
+          "links": [
+            {
+              "title": "View traces for this time range",
+              "url": "/explore?orgId=1&left={\"datasource\":\"tempo\",\"queries\":[{\"queryType\":\"traceql\",\"query\":\"{ resource.service.name = \\\"frontdeskai\\\" }\",\"refId\":\"A\"}],\"range\":{\"from\":\"${__from}\",\"to\":\"${__to}\"}}"
+            }
+          ],
           "custom": {
             "drawStyle": "line",
             "lineInterpolation": "smooth",
@@ -381,7 +427,7 @@
       "id": 12,
       "type": "timeseries",
       "title": "LLM Error Rate by Agent",
-      "description": "Errors per second per agent. Spike = API key invalid, rate limit, or model error. Correlate with error logs below.",
+      "description": "Errors per second per agent. Spike = API key invalid, rate limit, or model error. Click bar to view error logs.",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "options": {
@@ -392,6 +438,12 @@
         "defaults": {
           "color": { "mode": "palette-classic" },
           "unit": "short",
+          "links": [
+            {
+              "title": "View error logs",
+              "url": "/explore?orgId=1&left={\"datasource\":\"loki\",\"queries\":[{\"expr\":\"{app=\\\"frontdeskai\\\",level=\\\"ERROR\\\"} | json\",\"refId\":\"A\"}],\"range\":{\"from\":\"${__from}\",\"to\":\"${__to}\"}}"
+            }
+          ],
           "custom": {
             "drawStyle": "bars",
             "fillOpacity": 80,
@@ -418,7 +470,7 @@
       "id": 13,
       "type": "timeseries",
       "title": "LLM Call Duration P95 by Agent",
-      "description": "Per-agent LLM latency. Slow agents indicate the LLM is sluggish or prompts are too long.",
+      "description": "Per-agent LLM latency. Slow agents indicate the LLM is sluggish or prompts are too long. Click to view traces.",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "options": {
@@ -429,6 +481,12 @@
         "defaults": {
           "color": { "mode": "palette-classic" },
           "unit": "s",
+          "links": [
+            {
+              "title": "View traces for this time range",
+              "url": "/explore?orgId=1&left={\"datasource\":\"tempo\",\"queries\":[{\"queryType\":\"traceql\",\"query\":\"{ resource.service.name = \\\"frontdeskai\\\" }\",\"refId\":\"A\"}],\"range\":{\"from\":\"${__from}\",\"to\":\"${__to}\"}}"
+            }
+          ],
           "custom": {
             "drawStyle": "line",
             "lineInterpolation": "smooth",

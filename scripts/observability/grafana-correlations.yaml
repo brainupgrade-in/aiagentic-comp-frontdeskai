@@ -1,0 +1,78 @@
+# Grafana Correlations — global drill-through links between datasources.
+# These appear automatically in Explore and on any panel that uses these
+# datasources, without needing per-panel configuration.
+#
+# Applied via ConfigMap: scripts/update-observability.sh correlations
+#
+# Requires Grafana 9.4+ with feature toggle: correlations (enabled by default in 10+)
+
+apiVersion: 1
+
+correlations:
+
+  # Prometheus metrics → Loki logs
+  # When viewing any Prometheus metric, a "View Logs" link appears
+  - uid: prom-to-loki-logs
+    sourceUID: prometheus
+    targetUID: loki
+    label: "View App Logs"
+    description: "Show FrontDesk AI application logs for this time range"
+    type: query
+    config:
+      field:
+        name: Value
+        type: number
+      target:
+        expr: '{app="frontdeskai"} | json'
+      transformations:
+        - type: timeRange
+
+  # Prometheus metrics → Loki error logs
+  - uid: prom-to-loki-errors
+    sourceUID: prometheus
+    targetUID: loki
+    label: "View Error Logs"
+    description: "Show FrontDesk AI ERROR-level logs for this time range"
+    type: query
+    config:
+      field:
+        name: Value
+        type: number
+      target:
+        expr: '{app="frontdeskai", level="ERROR"} | json'
+      transformations:
+        - type: timeRange
+
+  # Prometheus metrics → Tempo traces
+  - uid: prom-to-tempo-traces
+    sourceUID: prometheus
+    targetUID: tempo
+    label: "View Traces"
+    description: "Show FrontDesk AI traces for this time range"
+    type: query
+    config:
+      field:
+        name: Value
+        type: number
+      target:
+        queryType: traceql
+        query: '{ resource.service.name = "frontdeskai" }'
+      transformations:
+        - type: timeRange
+
+  # Loki logs → Tempo traces (supplements the derivedFields trace_id link)
+  - uid: loki-to-tempo-traces
+    sourceUID: loki
+    targetUID: tempo
+    label: "View All Traces"
+    description: "Show all FrontDesk AI traces for this time range"
+    type: query
+    config:
+      field:
+        name: Line
+        type: string
+      target:
+        queryType: traceql
+        query: '{ resource.service.name = "frontdeskai" }'
+      transformations:
+        - type: timeRange
