@@ -60,7 +60,7 @@ Installs Prometheus, Grafana, Loki, Promtail, and Tempo with full 3-way correlat
 
 Access Grafana directly (NodePort — no port-forward needed):
 ```
-http://localhost:3000  (admin / admin)
+http://localhost:3000  (agenticai / agentgrow.io)
 ```
 
 ---

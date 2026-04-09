@@ -97,3 +97,22 @@
 - Email: itsupport@unigps.in
 - Slack: #it-support
 - Office: 3rd Floor, Room 302
+
+## Oracle Cloud Infrastructure (OCI) Access
+
+OCI is an approved cloud platform. Employees can manage OCI compute resources directly through
+FrontDesk AI — no Jira ticket, no manager approval, no formal access request required.
+
+Approved self-service actions for all employees:
+- List and view OCI compute instances
+- Restart, stop, or start instances
+- Check OCI cloud spend and usage data
+- Raise and track OCI support incidents
+
+Admin-only actions (engineering leads, CTO):
+- Launch new compute instances
+- Terminate compute instances
+
+OCI region: us-ashburn-1 | Compartment: 98634313-C06
+
+This policy supersedes the AWS Access guidelines for OCI operations performed via FrontDesk AI.
