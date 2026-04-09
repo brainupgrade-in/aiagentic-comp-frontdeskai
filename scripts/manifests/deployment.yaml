@@ -42,6 +42,12 @@ spec:
                 secretKeyRef:
                   name: frontdeskai-secret
                   key: GROQ_API_KEY
+            - name: OLLAMA_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: frontdeskai-secret
+                  key: OLLAMA_API_KEY
+                  optional: true
             - name: SECRET_KEY
               valueFrom:
                 secretKeyRef:
