@@ -1667,6 +1667,9 @@ def approve_leave_via_mcp(
 
 
 HR_TOOLS = [get_leave_balance_from_hr_system, approve_leave_via_mcp, get_leave_balance, apply_leave]
+
+# Tools available to the manager agent — approve escalated leave requests
+MANAGER_TOOLS = [get_leave_balance_from_hr_system, approve_leave_via_mcp]
 TECH_TOOLS = [create_ticket, get_ticket_status, list_my_tickets]
 FINANCE_TOOLS = [get_expense_status, submit_expense_claim, get_payslip]
 FACILITIES_TOOLS = [check_room_availability, book_meeting_room]
