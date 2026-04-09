@@ -41,12 +41,68 @@ def _conn() -> psycopg2.extensions.connection:
 
 
 # ---------------------------------------------------------------------------
+# Defaults
+# ---------------------------------------------------------------------------
+
+LEAVE_DEFAULTS = {
+    "casual_leave": 12,
+    "sick_leave":    6,
+    "earned_leave": 15,
+    "wfh_days":     24,
+}
+
+
+def _ensure_employee(cur, employee_id: str) -> bool:
+    """Create employee + leave_balance rows with defaults if they don't exist.
+
+    Returns True if records were just created, False if they already existed.
+    """
+    cur.execute("SELECT employee_id FROM employees WHERE employee_id = %s", (employee_id,))
+    if not cur.fetchone():
+        full_name   = employee_id.replace(".", " ").replace("_", " ").title()
+        email       = f"{employee_id}@unigps.in"
+        cur.execute(
+            """
+            INSERT INTO employees (employee_id, full_name, email, department, designation)
+            VALUES (%s, %s, %s, 'General', 'Employee')
+            ON CONFLICT (employee_id) DO NOTHING
+            """,
+            (employee_id, full_name, email),
+        )
+
+    cur.execute("SELECT employee_id FROM leave_balances WHERE employee_id = %s", (employee_id,))
+    if not cur.fetchone():
+        import datetime
+        cur.execute(
+            """
+            INSERT INTO leave_balances
+                (employee_id, casual_leave, sick_leave, earned_leave, wfh_days, year)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (employee_id) DO NOTHING
+            """,
+            (
+                employee_id,
+                LEAVE_DEFAULTS["casual_leave"],
+                LEAVE_DEFAULTS["sick_leave"],
+                LEAVE_DEFAULTS["earned_leave"],
+                LEAVE_DEFAULTS["wfh_days"],
+                datetime.date.today().year,
+            ),
+        )
+        return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
 def get_leave_balance(employee_id: str) -> str:
     """Return remaining leave balance for an employee.
+
+    If the employee has no record in the HR database, one is created
+    automatically with standard annual leave defaults.
 
     Args:
         employee_id: Username portion of the employee email
@@ -55,6 +111,11 @@ def get_leave_balance(employee_id: str) -> str:
     conn = _conn()
     try:
         cur = conn.cursor()
+
+        # Auto-provision if missing
+        created = _ensure_employee(cur, employee_id)
+        if created:
+            conn.commit()
 
         # Current balance
         cur.execute(
@@ -70,10 +131,7 @@ def get_leave_balance(employee_id: str) -> str:
         )
         emp = cur.fetchone()
         if not emp:
-            return (
-                f"No leave record found for '{employee_id}'. "
-                "Please contact HR to set up the account."
-            )
+            return f"Could not create leave record for '{employee_id}'. Please contact HR."
 
         # Approved usage this year
         cur.execute(
@@ -101,8 +159,11 @@ def get_leave_balance(employee_id: str) -> str:
         )
         pending = cur.fetchall()
 
+        header = f"Leave balance for {emp['full_name']} ({emp['department']}) — {emp['year']}:"
+        if created:
+            header += "  [account auto-provisioned with standard defaults]"
         lines = [
-            f"Leave balance for {emp['full_name']} ({emp['department']}) — {emp['year']}:",
+            header,
             f"  Casual Leave : {emp['casual_leave']} days remaining  (used: {used.get('casual', 0)})",
             f"  Sick Leave   : {emp['sick_leave']} days remaining  (used: {used.get('sick', 0)})",
             f"  Earned Leave : {emp['earned_leave']} days remaining  (used: {used.get('earned', 0)})",
