@@ -712,7 +712,16 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
 
             # === Final structured response (with full tool context in messages) ===
             with trace_llm_call(f"{name}_worker_final") as ctx:
-                result = get_llm_chain(WorkerResponse).invoke(messages, config={"callbacks": get_lf_callbacks()})
+                try:
+                    result = get_llm_chain(WorkerResponse).invoke(messages, config={"callbacks": get_lf_callbacks()})
+                except Exception as parse_err:
+                    # Model returned plain text instead of JSON — use it directly as the response
+                    raw = getattr(parse_err, "llm_output", "") or ""
+                    # Strip the error prefix if present
+                    raw = re.sub(r"^Invalid json output:\s*", "", raw).strip()
+                    if not raw:
+                        raise
+                    result = WorkerResponse(response=raw, needs_escalation=False)
                 ctx["response"] = result
 
             escalate = can_escalate and result.needs_escalation
