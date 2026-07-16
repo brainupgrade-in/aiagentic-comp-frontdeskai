@@ -58,6 +58,7 @@ def _init_schema(conn: sqlite3.Connection):
             department    TEXT NOT NULL DEFAULT 'general',
             designation   TEXT NOT NULL DEFAULT 'Employee',
             date_of_join  TEXT NOT NULL DEFAULT (date('now')),
+            manager_id    TEXT REFERENCES employees(employee_id),
             is_active     INTEGER NOT NULL DEFAULT 1,
             created_at    TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
@@ -262,34 +263,36 @@ def _init_schema(conn: sqlite3.Connection):
         return
 
     employees = [
-        ("rajesh",       "Rajesh Gheware",  "rajesh@unigps.in",       "engineering", "CTO",               "2020-01-15"),
-        ("admin",        "Admin User",      "admin@unigps.in",        "admin",       "System Admin",      "2020-01-01"),
-        ("priya.sharma", "Priya Sharma",    "priya.sharma@unigps.in", "engineering", "Senior Developer",  "2022-06-10"),
-        ("amit.patel",   "Amit Patel",      "amit.patel@unigps.in",   "engineering", "DevOps Engineer",   "2023-03-20"),
-        ("neha.gupta",   "Neha Gupta",      "neha.gupta@unigps.in",   "product",     "Product Manager",   "2023-09-01"),
-        ("suresh.kumar", "Suresh Kumar",    "suresh.kumar@unigps.in", "finance",     "Finance Manager",   "2021-04-12"),
-        ("anita.verma",  "Anita Verma",     "anita.verma@unigps.in",  "hr",          "HR Manager",        "2021-02-01"),
-        ("it.support",   "IT Support Desk", "it.support@unigps.in",   "it",          "IT Support Lead",   "2020-01-01"),
+        ("admin",        "Admin User",           "admin@unigps.in",        "admin",       "Administrator",    "2020-01-01", None),
+        ("arjun.nayak",  "Arjun Nayak",          "arjun.nayak@unigps.in",  "engineering", "Engineering Manager", "2022-06-01", None),
+        ("rajesh.kumar", "Rajesh Kumar",         "rajesh.kumar@unigps.in", "engineering", "Senior Engineer",   "2023-01-15", "arjun.nayak"),
+        ("priya.sharma", "Priya Sharma",         "priya.sharma@unigps.in", "hr",          "HR Manager",        "2021-02-01", None),
+        ("sunita.rao",   "Sunita Rao",           "sunita.rao@unigps.in",   "hr",          "HR Business Partner","2023-06-20", "priya.sharma"),
+        ("amit.patel",   "Amit Patel",           "amit.patel@unigps.in",   "finance",     "Finance Lead",      "2023-03-20", None),
+        ("vikram.singh", "Vikram Singh",         "vikram.singh@unigps.in", "finance",     "Finance Analyst",   "2024-03-10", "amit.patel"),
+        ("sneha.reddy",  "Sneha Reddy",          "sneha.reddy@unigps.in",  "facilities",  "Facilities Manager", "2022-07-15", None),
+        ("neha.gupta",   "Neha Gupta",           "neha.gupta@unigps.in",   "facilities",  "Facilities Coordinator", "2023-11-05", "sneha.reddy"),
     ]
     conn.executemany(
-        "INSERT OR IGNORE INTO employees (employee_id, full_name, email, department, designation, date_of_join) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO employees (employee_id, full_name, email, department, designation, date_of_join, manager_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
         employees,
     )
 
     leave_balances = [
-        ("rajesh",        8,  5,  12, 20),
-        ("admin",        12,  6,  15, 24),
-        ("priya.sharma",  5,  3,  10, 18),
-        ("amit.patel",   10,  6,  14, 22),
-        ("neha.gupta",    3,  2,   8, 15),
-        ("suresh.kumar", 11,  6,  13, 22),
-        ("anita.verma",   9,  4,  11, 20),
-        ("it.support",   12,  6,  15, 24),
+        ("admin",        20, 10, 15, 24, 2026),
+        ("arjun.nayak",  15,  8, 20, 24, 2026),
+        ("rajesh.kumar", 18,  8, 12, 24, 2026),
+        ("priya.sharma", 20, 10, 15, 24, 2026),
+        ("sunita.rao",   10,  5, 12, 20, 2026),
+        ("amit.patel",   16,  8, 10, 24, 2026),
+        ("vikram.singh", 11,  6, 14, 22, 2026),
+        ("sneha.reddy",  18,  9, 12, 24, 2026),
+        ("neha.gupta",   12,  6, 15, 24, 2026),
     ]
     conn.executemany(
-        "INSERT OR IGNORE INTO leave_balances (employee_id, casual_leave, sick_leave, earned_leave, wfh_days) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO leave_balances (employee_id, casual_leave, sick_leave, earned_leave, wfh_days, year) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
         leave_balances,
     )
 
@@ -310,15 +313,15 @@ def _init_schema(conn: sqlite3.Connection):
 
     tickets = [
         ("TECH-1001", "VPN not connecting from home",      "Getting timeout errors when connecting via Cisco AnyConnect from home WiFi. Tried restarting the client.",
-         "P2", "In Progress", "network",   "it.support",  "priya.sharma", None, 24, "2026-02-17 09:15:00"),
+         "P2", "In Progress", "network",   "admin",       "priya.sharma", None, 24, "2026-02-17 09:15:00"),
         ("TECH-1002", "Need AWS console access",           "Require read access to production S3 buckets and CloudWatch logs for debugging.",
          "P3", "Open",        "access",    None,           "amit.patel",   None, 48, "2026-02-18 11:30:00"),
         ("TECH-1003", "Laptop screen flickering",          "Dell XPS 15 screen flickers intermittently, especially when on battery power.",
          "P3", "Open",        "hardware",  None,           "neha.gupta",   None, 48, "2026-02-20 14:00:00"),
         ("TECH-1004", "Jira dashboard loading slow",       "Jira dashboards take 15+ seconds to load. Other team members reporting same issue.",
-         "P2", "Resolved",    "software",  "it.support",  "rajesh",       "2026-02-19 16:30:00", 24, "2026-02-19 10:00:00"),
+         "P2", "Resolved",    "software",  "admin",        "rajesh.kumar", "2026-02-19 16:30:00", 24, "2026-02-19 10:00:00"),
         ("TECH-1005", "New joiner laptop setup",           "Need a MacBook Pro M3 setup with standard dev tools for new hire starting Feb 24.",
-         "P4", "Open",        "hardware",  None,           "anita.verma",  None, 72, "2026-02-21 08:45:00"),
+         "P4", "Open",        "hardware",  None,           "sunita.rao",   None, 72, "2026-02-21 08:45:00"),
     ]
     conn.executemany(
         "INSERT OR IGNORE INTO tickets "
@@ -329,9 +332,9 @@ def _init_schema(conn: sqlite3.Connection):
 
     ticket_comments = [
         ("TECH-1001", "priya.sharma", "Tried restarting laptop and router, still not working."),
-        ("TECH-1001", "it.support",   "Checked VPN server logs. Session is timing out at the firewall. Escalating to network team."),
-        ("TECH-1004", "it.support",   "Identified the issue — Jira indexing job was stuck. Cleared the queue and restarted the service."),
-        ("TECH-1004", "rajesh",       "Confirmed it's loading fast now. Thanks!"),
+        ("TECH-1001", "admin",       "Checked VPN server logs. Session is timing out at the firewall. Escalating to network team."),
+        ("TECH-1004", "admin",       "Identified the issue — Jira indexing job was stuck. Cleared the queue and restarted the service."),
+        ("TECH-1004", "rajesh.kumar", "Confirmed it's loading fast now. Thanks!"),
     ]
     for tc in ticket_comments:
         conn.execute(
@@ -341,17 +344,17 @@ def _init_schema(conn: sqlite3.Connection):
             (*tc, *tc),
         )
 
-    expense_claims = [
-        ("EXP-2026-0001", "rajesh",       4500.00,  "travel",    "Client visit to Mumbai — flight tickets (BLR-BOM round trip)",
-         2, "approved",    "suresh.kumar", None,           "2026-02-10", "2026-02-15", "2026-02-18"),
-        ("EXP-2026-0002", "priya.sharma", 1200.00,  "software",  "JetBrains IntelliJ IDEA Ultimate — annual license renewal",
+expense_claims = [
+        ("EXP-2026-0001", "rajesh.kumar",  4500.00, "travel",    "Client visit to Mumbai — flight tickets (BLR-BOM round trip)",
+         2, "approved",    "amit.patel", None,           "2026-02-10", "2026-02-15", "2026-02-18"),
+        ("EXP-2026-0002", "priya.sharma",  1200.00, "software",  "JetBrains IntelliJ IDEA Ultimate — annual license renewal",
          1, "submitted",   None,           None,           "2026-02-18", None,          None),
-        ("EXP-2026-0003", "amit.patel",    850.00,  "meals",     "Team dinner — Q4 project celebration at Barbeque Nation",
-         1, "under_review","suresh.kumar", None,           "2026-02-19", None,          None),
-        ("EXP-2026-0004", "neha.gupta",  15000.00,  "training",  "AWS Solutions Architect Professional course on Udemy",
-         1, "rejected",    "suresh.kumar", "Exceeds per-course limit of Rs. 10,000. Please get VP approval.", "2026-02-05", "2026-02-12", None),
-        ("EXP-2026-0005", "rajesh",       2200.00,  "travel",    "Cab to airport and back for Mumbai client visit",
-         2, "paid",        "suresh.kumar", None,           "2026-02-10", "2026-02-15", "2026-02-20"),
+        ("EXP-2026-0003", "amit.patel",     850.00,  "meals",     "Team dinner — Q4 project celebration",
+         1, "under_review","amit.patel", None,           "2026-02-19", None,          None),
+        ("EXP-2026-0004", "vikram.singh",  15000.00, "training",  "AWS Solutions Architect Professional course",
+         1, "rejected",    "amit.patel", "Exceeds per-course limit. Please get VP approval.", "2026-02-05", "2026-02-12", None),
+        ("EXP-2026-0005", "rajesh.kumar",  2200.00, "travel",    "Cab to airport and back for client visit",
+         2, "paid",        "amit.patel", None,           "2026-02-10", "2026-02-15", "2026-02-20"),
     ]
     conn.executemany(
         "INSERT OR IGNORE INTO expense_claims "
@@ -375,10 +378,10 @@ def _init_schema(conn: sqlite3.Connection):
     )
 
     bookings = [
-        ("ganges",  "2026-02-20", "10:00", "11:00", "rajesh",       "Sprint planning",           6),
-        ("kaveri",  "2026-02-20", "14:00", "15:30", "priya.sharma", "Design review",             8),
-        ("ganges",  "2026-02-21", "09:00", "10:00", "amit.patel",   "Morning standup",           4),
-        ("godavari","2026-02-20", "11:00", "12:00", "neha.gupta",   "Product roadmap discussion",5),
+        ("ganges",  "2026-02-20", "10:00", "11:00", "rajesh.kumar",  "Sprint planning",           6),
+        ("kaveri",  "2026-02-20", "14:00", "15:30", "priya.sharma",  "Design review",             8),
+        ("ganges",  "2026-02-21", "09:00", "10:00", "amit.patel",    "Morning standup",           4),
+        ("godavari","2026-02-20", "11:00", "12:00", "neha.gupta",    "Product roadmap discussion",5),
     ]
     for b in bookings:
         conn.execute(
@@ -390,14 +393,22 @@ def _init_schema(conn: sqlite3.Connection):
 
     # Payslips for last 3 months
     payslip_data = [
-        ("rajesh",       "2025-12", 250000, 62500,  187500),
-        ("rajesh",       "2026-01", 250000, 62500,  187500),
-        ("priya.sharma", "2025-12", 150000, 37500,  112500),
-        ("priya.sharma", "2026-01", 150000, 37500,  112500),
-        ("amit.patel",   "2025-12", 120000, 30000,   90000),
-        ("amit.patel",   "2026-01", 120000, 30000,   90000),
-        ("neha.gupta",   "2025-12", 140000, 35000,  105000),
-        ("neha.gupta",   "2026-01", 140000, 35000,  105000),
+        ("rajesh.kumar",      "2025-12", 250000, 62500,  187500),
+        ("rajesh.kumar",      "2026-01", 250000, 62500,  187500),
+        ("priya.sharma",      "2025-12", 150000, 37500,  112500),
+        ("priya.sharma",      "2026-01", 150000, 37500,  112500),
+        ("amit.patel",        "2025-12", 120000, 30000,   90000),
+        ("amit.patel",        "2026-01", 120000, 30000,   90000),
+        ("arjun.nayak",       "2025-12", 300000, 75000,  225000),
+        ("arjun.nayak",       "2026-01", 300000, 75000,  225000),
+        ("sunita.rao",        "2025-12", 140000, 35000,  105000),
+        ("sunita.rao",        "2026-01", 140000, 35000,  105000),
+        ("vikram.singh",      "2025-12", 100000, 25000,   75000),
+        ("vikram.singh",      "2026-01", 100000, 25000,   75000),
+        ("sneha.reddy",       "2025-12", 160000, 40000,  120000),
+        ("sneha.reddy",       "2026-01", 160000, 40000,  120000),
+        ("neha.gupta",        "2025-12", 140000, 35000,  105000),
+        ("neha.gupta",        "2026-01", 140000, 35000,  105000),
     ]
     conn.executemany(
         "INSERT OR IGNORE INTO payslips (employee_id, month, gross_salary, deductions, net_salary) "
