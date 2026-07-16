@@ -15,6 +15,7 @@ from langchain_openai import ChatOpenAI
 from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import SystemMessage, AIMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, START, END
 from pydantic import BaseModel, Field, SecretStr
 
@@ -378,7 +379,8 @@ def _parse_classification_text(text: str) -> Classification | None:
     return Classification(category=cat, confidence=conf)  # type: ignore[arg-type]
 
 
-def supervisor(state: SupportRequest) -> dict:
+def supervisor(state: SupportRequest, config: RunnableConfig = None) -> dict:
+    callbacks = config.get("callbacks", []) if config else []
     ts = datetime.now().strftime("%H:%M:%S")
     try:
         prompt = SUPERVISOR_PROMPT.format_messages(
@@ -388,7 +390,7 @@ def supervisor(state: SupportRequest) -> dict:
         )
         with trace_llm_call("supervisor") as ctx:
             try:
-                result = get_llm_chain(Classification).invoke(prompt)
+                result = get_llm_chain(Classification).with_config(callbacks=callbacks).invoke(prompt)
             except Exception as parse_err:
                 # Model returned plain text instead of JSON — try regex extraction
                 raw = getattr(parse_err, "llm_output", "") or str(parse_err)
@@ -683,8 +685,9 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
          "[USER_REQUEST_START]\n{request}\n[USER_REQUEST_END]"),
     ])
 
-    def worker(state: SupportRequest) -> dict:
+    def worker(state: SupportRequest, config: RunnableConfig = None) -> dict:
         ts = datetime.now().strftime("%H:%M:%S")
+        callbacks = config.get("callbacks", []) if config else []
         try:
             messages = prompt_template.format_messages(
                 fewshot_context=state.get("fewshot_context") or "",
@@ -721,6 +724,10 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
                 primary_tool_llm = get_llm().bind_tools(active_tools)
                 fb = get_fallback_llm()
                 fallback_tool_llm = fb.bind_tools(active_tools) if fb else None
+                if callbacks:
+                    primary_tool_llm = primary_tool_llm.with_config(callbacks=callbacks)
+                    if fallback_tool_llm:
+                        fallback_tool_llm = fallback_tool_llm.with_config(callbacks=callbacks)
                 active_tool_llm = (
                     primary_tool_llm.with_fallbacks([fallback_tool_llm])
                     if fallback_tool_llm else primary_tool_llm
@@ -783,7 +790,7 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
             # === Final structured response (with full tool context in messages) ===
             with trace_llm_call(f"{name}_worker_final") as ctx:
                 try:
-                    result = get_llm_chain(WorkerResponse).invoke(messages)
+                    result = get_llm_chain(WorkerResponse).with_config(callbacks=callbacks).invoke(messages)
                 except Exception as parse_err:
                     # Model returned plain text instead of JSON — use it directly as the response
                     raw = getattr(parse_err, "llm_output", "") or ""
@@ -915,8 +922,9 @@ MANAGER_PROMPT = ChatPromptTemplate.from_messages([
 ])
 
 
-def manager_agent(state: SupportRequest) -> dict:
+def manager_agent(state: SupportRequest, config: RunnableConfig = None) -> dict:
     """Manager agent with tool-calling loop — can approve leave directly in the HR database."""
+    callbacks = config.get("callbacks", []) if config else []
     ts = datetime.now().strftime("%H:%M:%S")
     audit: list[str] = []
     try:
@@ -931,6 +939,8 @@ def manager_agent(state: SupportRequest) -> dict:
 
         tools_by_name = {t.name: t for t in MANAGER_TOOLS}
         llm_with_tools = get_llm_chain().bind_tools(MANAGER_TOOLS)
+        if callbacks:
+            llm_with_tools = llm_with_tools.with_config(callbacks=callbacks)
 
         final_text = ""
         for iteration in range(3):

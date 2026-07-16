@@ -51,7 +51,7 @@ def _init_schema(conn: sqlite3.Connection):
         -- =============================================
         -- EMPLOYEES: master table for all employee data
         -- =============================================
-        CREATE TABLE IF NOT EXISTS employees (
+CREATE TABLE IF NOT EXISTS employees (
             employee_id   TEXT PRIMARY KEY,              -- username part of email
             full_name     TEXT NOT NULL,
             email         TEXT NOT NULL UNIQUE,
@@ -344,7 +344,7 @@ def _init_schema(conn: sqlite3.Connection):
             (*tc, *tc),
         )
 
-expense_claims = [
+        expense_claims = [
         ("EXP-2026-0001", "rajesh.kumar",  4500.00, "travel",    "Client visit to Mumbai — flight tickets (BLR-BOM round trip)",
          2, "approved",    "amit.patel", None,           "2026-02-10", "2026-02-15", "2026-02-18"),
         ("EXP-2026-0002", "priya.sharma",  1200.00, "software",  "JetBrains IntelliJ IDEA Ultimate — annual license renewal",
@@ -362,7 +362,7 @@ expense_claims = [
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         expense_claims,
     )
-
+        
     rooms = [
         ("ganges",   "Ganges",   10, "2nd Floor", 1, 1, 1),
         ("yamuna",   "Yamuna",    6, "2nd Floor", 1, 0, 0),
@@ -376,7 +376,7 @@ expense_claims = [
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         rooms,
     )
-
+        
     bookings = [
         ("ganges",  "2026-02-20", "10:00", "11:00", "rajesh.kumar",  "Sprint planning",           6),
         ("kaveri",  "2026-02-20", "14:00", "15:30", "priya.sharma",  "Design review",             8),
@@ -390,7 +390,7 @@ expense_claims = [
             "WHERE NOT EXISTS (SELECT 1 FROM room_bookings WHERE room_id=? AND date=? AND start_time=?)",
             (*b, b[0], b[1], b[2]),
         )
-
+        
     # Payslips for last 3 months
     payslip_data = [
         ("rajesh.kumar",      "2025-12", 250000, 62500,  187500),
@@ -415,7 +415,7 @@ expense_claims = [
         "VALUES (?, ?, ?, ?, ?)",
         payslip_data,
     )
-
+        
     conn.commit()
 
 
@@ -751,6 +751,36 @@ def submit_expense_claim(employee_id: str, amount: float, category: str, descrip
             f"  Description: {description}\n"
             f"  Status:      submitted (pending finance review)"
         )
+    finally:
+        conn.close()
+
+
+@tool
+def approve_expense_claim(claim_id: str, approver_id: str, status: str) -> str:
+    """Approve or reject an expense claim. status: 'approved' or 'rejected'. approver_id must be a valid employee (typically the claimant's manager)."""
+    if status not in ("approved", "rejected"):
+        return "Status must be 'approved' or 'rejected'."
+
+    conn = _get_db()
+    try:
+        row = conn.execute("SELECT employee_id, status FROM expense_claims WHERE claim_id = ?", (claim_id.upper(),)).fetchone()
+        if not row:
+            return f"Expense claim '{claim_id}' not found."
+        if row["status"] not in ("submitted", "under_review"):
+            return f"Claim {claim_id} is already {row['status']} — cannot change status."
+
+        emp = conn.execute("SELECT 1 FROM employees WHERE employee_id = ? AND is_active = 1", (approver_id,)).fetchone()
+        if not emp:
+            return f"Approver '{approver_id}' not found or inactive."
+
+        from datetime import datetime
+        now = datetime.now().isoformat()
+        conn.execute(
+            "UPDATE expense_claims SET status = ?, reviewed_by = ?, reviewed_at = ? WHERE claim_id = ?",
+            (status, approver_id, now, claim_id.upper()),
+        )
+        conn.commit()
+        return f"Expense claim {claim_id.upper()} has been {status} by {approver_id}."
     finally:
         conn.close()
 
@@ -1682,7 +1712,7 @@ HR_TOOLS = [get_leave_balance_from_hr_system, approve_leave_via_mcp, get_leave_b
 # Tools available to the manager agent — approve escalated leave requests
 MANAGER_TOOLS = [get_leave_balance_from_hr_system, approve_leave_via_mcp]
 TECH_TOOLS = [create_ticket, get_ticket_status, list_my_tickets]
-FINANCE_TOOLS = [get_expense_status, submit_expense_claim, get_payslip]
+FINANCE_TOOLS = [get_expense_status, submit_expense_claim, approve_expense_claim, get_payslip]
 FACILITIES_TOOLS = [check_room_availability, book_meeting_room]
 
 from skills import SKILL_ADMIN_TOOLS
