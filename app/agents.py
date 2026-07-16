@@ -29,7 +29,7 @@ from skills import get_skill_tools
 
 _llm_config = {
     "provider": "ollama",
-    "model": "kimi-k2.5",
+    "model": "gemma4:cloud",
     "temperature": 0.0,
     "api_key": "",  # empty = use OLLAMA_API_KEY env var
 }
