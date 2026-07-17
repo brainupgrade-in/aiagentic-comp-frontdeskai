@@ -5,8 +5,8 @@
   // Minimum 4-core / 8GB RAM recommended: kind control plane (~500MB)
   // + Docker daemon (~200MB) + FrontDesk AI with ONNX/ChromaDB (~1GB) = ~2GB+
   "hostRequirements": {
-    "cpus": 4,
-    "memory": "8gb",
+    "cpus": 2,
+    "memory": "4gb",
     "storage": "32gb"
   },
 
