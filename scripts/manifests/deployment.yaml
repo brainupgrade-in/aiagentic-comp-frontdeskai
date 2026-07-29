@@ -77,6 +77,10 @@ spec:
                   name: frontdeskai-secret
                   key: LANGFUSE_HOST
                   optional: true
+            # Pre-populate demo employees, leave, tickets, expenses, rooms, payslips
+            # (see use-case-scenarios.md — set to "false" for a clean instance)
+            - name: SEED_DEMO_DATA
+              value: "true"
             # Observability config
             - name: OTEL_SERVICE_NAME
               value: "frontdeskai"

@@ -2,125 +2,56 @@
 
 ## Prerequisites
 
-- An **Ollama Cloud API key** (primary LLM) — sign up at https://ollama.com
-- A **Groq API key** (fallback LLM, recommended) — free tier at https://console.groq.com
-- **Option A (recommended):** GitHub account to launch a Codespace
-- **Option B:** Local machine with Docker and Python 3.13 (matches the `Containerfile` base image)
+- **Ollama Cloud API key** (primary LLM) — https://ollama.com
+- **Groq API key** (fallback, recommended) — free tier at https://console.groq.com
+- Either a GitHub account for a Codespace (**Option A**, recommended), or Docker + Python 3.13 locally
+  (**Option B** — 3.13 matches the `Containerfile` base image)
 
 ---
 
-## Option A: GitHub Codespace (Recommended)
+## Option A: GitHub Codespace
 
-### 1. Launch the Codespace
+**1. Launch** — repo on GitHub → **Code → Codespaces → Create codespace on main**. The devcontainer
+installs Python 3.13, kubectl, helm, kind and Docker-in-Docker, creates the kind cluster `frontdeskai`,
+seeds `.env`, and creates `/shared/.sqlite`. Wait for the "Devcontainer notes" banner.
 
-Open the repo on GitHub → **Code → Codespaces → Create codespace on main**
+The app's Python dependencies are deliberately **not** installed in the Codespace — they are baked into
+the image by `Containerfile` and run inside kind. Deploy with `scripts/deploy.sh`, don't run
+`python app/app.py`.
 
-The devcontainer automatically:
-- Installs Python 3.13, kubectl, helm, kind, Docker-in-Docker
-- Creates a local kind Kubernetes cluster named `frontdeskai`
-- Seeds `.env` from `.env.example` (you still need to add your API keys)
-- Creates `/shared/.sqlite` for persistent storage
-
-The app's Python dependencies are **not** installed in the Codespace itself — they
-are baked into the container image by `Containerfile` and run inside the kind
-cluster. Deploy with `scripts/deploy.sh` rather than running `python app/app.py`.
-
-Wait for the setup to finish (watch the terminal — it prints a "Devcontainer notes" banner when done).
-
-### 2. Configure API Keys
+**2. Configure keys**
 
 ```bash
 cp .env.example .env
-# Edit .env — set OLLAMA_API_KEY (required) and GROQ_API_KEY (recommended fallback)
+# set OLLAMA_API_KEY (required) and GROQ_API_KEY (recommended)
 ```
 
-### 3. Deploy the App
+**3. Deploy** — `bash scripts/deploy.sh` builds the image, loads it into kind, creates the secret, and
+deploys.
 
-```bash
-bash scripts/deploy.sh
-```
-
-Builds the container image, loads it into the kind cluster, creates the Kubernetes secret, and deploys the app.
-
-### 4. Access the App
-
-The kind cluster is created with `extraPortMappings` and the service uses NodePort — no `kubectl port-forward` needed.
-
-Open directly in your browser:
-```
-http://localhost:8000
-```
-
-**Login:** Any email address + password `brainupgrade`
-(First login hashes and saves the password per user — change it later via chat)
-
-### 5. Install Observability Stack (Optional)
-
-```bash
-bash scripts/install-observability.sh
-```
-
-Installs Prometheus, Grafana, Loki, Promtail, and Tempo with full 3-way correlation (metrics ↔ logs ↔ traces).
-
-Access Grafana directly (NodePort — no port-forward needed):
-```
-http://localhost:3000  (agenticai / agentgrow.io)
-```
-
-Prometheus and Tempo have no NodePort — reach them with a port-forward:
-```bash
-kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9091:9090
-```
-
-### 6. Install the MCP Leave Service (Optional)
-
-Needed for the "how many leaves do I have left?" demo, which routes through a remote MCP server
-backed by PostgreSQL instead of the local SQLite tools.
-
-```bash
-bash scripts/deploy-mcp.sh
-```
-
-Deploys PostgreSQL + the MCP Leave Server into the `postgres` namespace and runs a
-cross-namespace smoke test.
+**4. Access** — open **http://localhost:8000** (NodePort via `extraPortMappings`, no port-forward). Log
+in with any email + `brainupgrade`; the first login stores that password against your user.
 
 ---
 
-## Option B: Local Machine (without Kubernetes)
-
-### 1. Clone and Configure
+## Option B: Local Machine
 
 ```bash
 git clone https://github.com/brainupgrade-in/aiagentic-comp-frontdeskai.git
 cd aiagentic-comp-frontdeskai
-
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r app/requirements.txt
-
-cp .env.example .env
-# Edit .env — set OLLAMA_API_KEY (required) and GROQ_API_KEY (recommended fallback)
+cp .env.example .env          # set OLLAMA_API_KEY + GROQ_API_KEY
+python app/app.py             # http://localhost:8000
 ```
 
-### 2. Run
+To run it on kind locally instead:
 
 ```bash
-python app/app.py
-# Open http://localhost:8000
-```
-
-### 3. Deploy to kind (with Kubernetes)
-
-```bash
-# Install kind (if not installed)
-curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64 && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind
-
-# One-time: create the 'frontdeskai' cluster with NodePort mappings + /shared/.sqlite
-bash scripts/create-kind-cluster.sh
-
-# Deploy app
+curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64 \
+  && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind
+bash scripts/create-kind-cluster.sh   # one-time: cluster + NodePort mappings + /shared/.sqlite
 bash scripts/deploy.sh
-
-# Access: http://localhost:8000  (NodePort — no port-forward needed)
 ```
 
 `create-kind-cluster.sh` needs passwordless sudo to create and chown `/shared`:
@@ -129,8 +60,8 @@ bash scripts/deploy.sh
 echo "$USER ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/$USER
 ```
 
-If you plan to install the observability stack, raise the host inotify limits first — Promtail
-will otherwise `CrashLoopBackOff` with `too many open files` (add to `/etc/sysctl.conf` to persist):
+If you plan to install observability, raise the host inotify limits first or Promtail will
+`CrashLoopBackOff` with `too many open files` (add to `/etc/sysctl.conf` to persist):
 
 ```bash
 sudo sysctl fs.inotify.max_user_instances=512
@@ -139,54 +70,47 @@ sudo sysctl fs.inotify.max_user_watches=524288
 
 ---
 
-## Verify Deployment
+## Optional Add-ons
+
+**Observability stack** — `bash scripts/install-observability.sh` installs Prometheus, Grafana, Loki,
+Promtail and Tempo with 3-way correlation. Grafana: **http://localhost:3000** (agenticai /
+agentgrow.io). Prometheus and Tempo have no NodePort:
 
 ```bash
-kubectl get pods -l app=frontdeskai
-kubectl logs deployment/frontdeskai
+kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9091:9090
 ```
 
-## Redeploy After Code Changes
-
-```bash
-bash scripts/deploy.sh
-```
-
-## Update API Keys Only (no image rebuild)
-
-```bash
-# Edit .env with new keys, then:
-bash scripts/update-secret.sh
-```
+**MCP Leave Service** — `bash scripts/deploy-mcp.sh` deploys PostgreSQL + the MCP Leave Server into the
+`postgres` namespace and runs a cross-namespace smoke test. Needed for the *"how many leaves do I have
+left?"* demo, which goes through a remote MCP server instead of local SQLite tools.
 
 ---
 
+## Day-to-Day
+
+```bash
+kubectl get pods -l app=frontdeskai      # verify
+kubectl logs deployment/frontdeskai
+bash scripts/deploy.sh                   # redeploy after code changes
+bash scripts/update-secret.sh            # update API keys from .env, no image rebuild
+```
+
 ## Troubleshooting
 
-**Pod stuck in `ImagePullBackOff` or `ErrImageNeverPull`:**
-```bash
-# Rebuild and reload the image into kind
-bash scripts/deploy.sh
-```
+**`ImagePullBackOff` / `ErrImageNeverPull`** — rerun `bash scripts/deploy.sh` to rebuild and reload the
+image into kind.
 
-**App not responding / 401 Unauthorized errors:**
+**Not responding, or 401 Unauthorized** — check the logs and confirm both keys are in the secret:
+
 ```bash
 kubectl logs deployment/frontdeskai | grep -i "error\|unauthorized"
-# Check the secret has both API keys
 kubectl get secret frontdeskai-secret -o jsonpath='{.data.OLLAMA_API_KEY}' | base64 -d
-kubectl get secret frontdeskai-secret -o jsonpath='{.data.GROQ_API_KEY}' | base64 -d
-# If missing, update from .env:
-bash scripts/update-secret.sh
+bash scripts/update-secret.sh    # if missing
 ```
 
-**kind cluster not found:**
-```bash
-kind get clusters
-# Recreate if missing (the script sets the NodePort mappings required for localhost access)
-bash scripts/create-kind-cluster.sh
-bash scripts/deploy.sh
-```
+**kind cluster not found** — `kind get clusters`; if missing, rerun `bash scripts/create-kind-cluster.sh`
+(it sets the NodePort mappings localhost access depends on) then `bash scripts/deploy.sh`.
 
-**Codespace enters recovery mode (Docker-in-Docker fails):**
-
-Ensure the devcontainer base image is `mcr.microsoft.com/devcontainers/python:3.13-bookworm` (not `bullseye`). Delete the Codespace and create a new one to pick up the fix.
+**Codespace enters recovery mode (Docker-in-Docker fails)** — the devcontainer base image must be
+`mcr.microsoft.com/devcontainers/python:3.13-bookworm`, not `bullseye`. Delete and recreate the Codespace
+to pick up the fix.
