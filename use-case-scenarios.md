@@ -57,13 +57,13 @@ check the audit trail for retrieval entries.
 flowchart TD
     A[User Message] --> B[Supervisor LLM]
     B --> C{Classification + Confidence Score}
-    C -->|Confidence >= 5| D[Route to Domain Worker]
-    C -->|Confidence < 5| E[Clarify Node]
+    C -->|"Confidence >= 5"| D[Route to Domain Worker]
+    C -->|"Confidence < 5"| E[Clarify Node]
     E --> F[Ask Follow-up Question]
     F --> G[Finalize]
     D --> H[RAG Retrieval?]
-    H -->|Yes (hr, tech, finance, facilities)| I[Policy Retrieval + Few-Shot]
-    H -->|No (analytics, account, general)| J[Direct to Worker]
+    H -->|"Yes (hr, tech, finance, facilities)"| I[Policy Retrieval + Few-Shot]
+    H -->|"No (analytics, account, general)"| J[Direct to Worker]
     I --> K[Domain Worker + Tools]
     J --> K
     K --> L[QA Gate]
