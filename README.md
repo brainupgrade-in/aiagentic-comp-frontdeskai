@@ -212,3 +212,61 @@ Prometheus and Tempo have no NodePort:
 ```bash
 kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9091:9090
 ```
+
+## Complete Workflow Diagram
+
+```mermaid
+flowchart TD
+    %% Entry point
+    START([START]) --> supervisor[supervisor<br/>LLM Classification + Confidence]
+
+    %% Supervisor routing based on confidence
+    supervisor -->|confidence < 5| clarify[clarify<br/>Follow-up Question]
+    supervisor -->|hr, tech, finance, facilities| rag_retrieval[rag_retrieval<br/>ChromaDB Policy Lookup]
+    supervisor -->|analytics| analytics_worker[analytics_worker<br/>Analytics Tools]
+    supervisor -->|account| account_worker[account_worker<br/>Password Tools]
+    supervisor -->|skill_admin \(admin\)| skill_admin_worker[skill_admin_worker<br/>Skill Admin Tools]
+    supervisor -->|skill_admin \(non-admin\)| general_worker[general_worker<br/>Static Response]
+    supervisor -->|general| general_worker
+
+    %% RAG path
+    rag_retrieval --> fewshot_retrieval[fewshot_retrieval<br/>Similar Q&A Examples]
+
+    %% Few-shot routes to 4 domain workers
+    fewshot_retrieval -->|hr| hr_worker[hr_worker<br/>Leave, HR Tools + ReAct]
+    fewshot_retrieval -->|tech| tech_worker[tech_worker<br/>Tickets, OCI + ReAct]
+    fewshot_retrieval -->|finance| finance_worker[finance_worker<br/>Expenses, Payslips + ReAct]
+    fewshot_retrieval -->|facilities| facilities_worker[facilities_worker<br/>Rooms, Booking + ReAct]
+
+    %% Clarify goes to finalize
+    clarify --> finalize[finalize<br/>Format Response + Audit Trail]
+
+    %% All 8 workers go to escalation_check
+    hr_worker --> escalation_check[escalation_check<br/>Policy Gate]
+    tech_worker --> escalation_check
+    finance_worker --> escalation_check
+    facilities_worker --> escalation_check
+    analytics_worker --> escalation_check
+    account_worker --> escalation_check
+    skill_admin_worker --> escalation_check
+    general_worker --> escalation_check
+
+    %% Escalation routing
+    escalation_check -->|needs_escalation| manager[manager<br/>Manager Approval + Tools]
+    escalation_check -->|no escalation| qa_check[qa_check<br/>PII Detection + QA Gate]
+
+    %% Manager goes to QA
+    manager --> qa_check
+
+    %% QA routing
+    qa_check -->|PASS| finalize
+    qa_check -->|FAIL \(retry < 1\)| retry_worker[retry_worker<br/>Worker Self-Correction]
+    qa_check -->|FAIL \(retry ≥ 1\)| fallback[fallback<br/>Static Template]
+
+    %% Retry loops back through escalation + QA
+    retry_worker --> escalation_check
+
+    %% Fallback and finalize
+    fallback --> finalize
+    finalize --> END([END])
+```

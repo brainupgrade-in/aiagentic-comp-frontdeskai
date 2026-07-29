@@ -86,13 +86,32 @@ instead of guessing a department. You get a follow-up question rather than a con
 This is the single most under-appreciated agentic behaviour in the app — knowing when *not* to act.
 
 ---
-
 ## Part 2 — Grounded Answers: RAG Over Real Policy
 
 Ask a question no tool can answer, only a document:
 
 ```
 How many consecutive casual leave days can I take without manager approval?
+```
+
+### RAG Retrieval Flow
+
+```mermaid
+flowchart TD
+    A[User Question] --> B[Supervisor Classification]
+    B --> C[Category: HR]
+    C --> D[RAG Retrieval: ChromaDB]
+    D --> E[Query: unigps_policies collection]
+    E --> F[Filter: category == hr]
+    F --> G[ONNX Embedding Search]
+    G --> H[Top-K Policy Chunks]
+    H --> I[Few-Shot Retrieval]
+    I --> J[fewshot_examples collection]
+    J --> K[HR Category Examples]
+    K --> L[Domain Worker Prompt]
+    L --> M[Policy Context + Few-Shot + User Question]
+    M --> N[LLM Generates Grounded Answer]
+    N --> O[Answer: 5 days without approval]
 ```
 
 **What to observe:** the answer is *5 days*, and 6–10 days require manager approval — pulled from
