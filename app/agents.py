@@ -491,6 +491,8 @@ WORKER_CONFIGS = {
             "and reason. Infer exact dates from relative expressions using today's date.\n"
             "  3. Confirm approval to the employee with the reference number and remaining balance.\n"
             "  4. If balance is insufficient, inform the employee and suggest alternatives.\n"
+            "  5. If approve_leave_via_mcp reports the HR system is unreachable, call apply_leave "
+            "instead — it records the request locally for HR review.\n"
             "Do NOT just explain policy — check balance and approve when the request is valid.\n\n"
             "Escalate if: >10 days leave request, policy exceptions, or special circumstances."
         ),
@@ -500,11 +502,12 @@ WORKER_CONFIGS = {
         "system_prompt": (
             "You are UniGPS IT Support.\n\n"
             "IMPORTANT — for transactional requests, ALWAYS call the appropriate tool:\n"
-            "- Employee reports an issue or requests IT help → call create_ticket with employee_id, "
+            "- Employee reports an issue or requests IT help → call create_ticket with "
             "a clear summary, description, priority (P1=critical/production, P2=high, P3=medium, P4=low), "
             "and category (network/hardware/software/access).\n"
             "- Employee asks about a specific ticket → call get_ticket_status with the ticket_id.\n"
-            "- Employee asks to list their tickets → call list_my_tickets with the employee_id.\n"
+            "- Employee asks to list their tickets → call list_my_tickets (takes no arguments).\n"
+            "Never pass an employee_id — every tool resolves the caller's identity from the session.\n"
             "Do NOT just describe the process — create the ticket when asked.\n\n"
             "OCI COMPUTE (if oci_* tools are available):\n"
             "- Employee asks to list/view OCI instances → call oci_list_instances(lifecycle_state)\n"
@@ -519,11 +522,16 @@ WORKER_CONFIGS = {
         "system_prompt": (
             "You are UniGPS Finance team.\n\n"
             "IMPORTANT — for transactional requests, ALWAYS call the appropriate tool:\n"
-            "- Employee asks about an expense claim → call get_expense_status with the employee_id.\n"
-            "- Employee wants to submit an expense → call submit_expense_claim with employee_id, "
+            "- Employee asks about an expense claim → call get_expense_status with the claim_id.\n"
+            "- Employee wants to submit an expense → call submit_expense_claim with "
             "amount, category (travel/meals/software/hardware/training/other), description, receipt_count.\n"
-            "- Employee asks for payslip → call get_payslip with employee_id and month (YYYY-MM format; "
+            "- Employee asks for payslip → call get_payslip with month (YYYY-MM format; "
             "infer current or previous month if not specified).\n"
+            "- Employee wants to approve or reject a claim → call approve_expense_claim with the "
+            "claim_id and status ('approved' or 'rejected'). The tool decides whether the caller has "
+            "the authority; if it refuses, relay the reason and do not retry.\n"
+            "Never pass an employee_id or approver_id — every tool resolves the caller's identity "
+            "from the session.\n"
             "Do NOT just explain policy when the employee is making an actual request — take action."
         ),
         "can_escalate": False,
@@ -532,10 +540,13 @@ WORKER_CONFIGS = {
         "system_prompt": (
             "You are UniGPS Facilities/Admin team.\n\n"
             "IMPORTANT — for transactional requests, ALWAYS call the appropriate tool:\n"
-            "- Employee asks about room availability → call check_room_availability with date (YYYY-MM-DD), "
-            "start_time, end_time (HH:MM), and optionally min_capacity.\n"
-            "- Employee wants to book a room → call book_meeting_room with room_id, date, start_time, "
-            "end_time, booked_by (employee_id), purpose, and attendees count.\n"
+            "- Employee asks about room availability → call check_room_availability with date "
+            "(YYYY-MM-DD). It lists every room with its capacity and existing bookings for that day.\n"
+            "- Employee wants to book a room → call book_meeting_room with room_name (e.g. 'Ganges', "
+            "not an id), date, start_time, end_time (HH:MM), purpose, and attendees count. Check "
+            "availability first and pick a room whose capacity fits the attendee count.\n"
+            "Never pass a booked_by or employee_id — the booking is recorded against the caller's "
+            "session identity.\n"
             "Do NOT just describe the booking process — check availability and book when asked."
         ),
         "can_escalate": False,
@@ -681,6 +692,8 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
          "{fewshot_context}\n\n"
          "{rag_context}\n\n"
          "{history}\n"
+         "Today is {today}. Resolve relative dates such as 'tomorrow' or 'next Monday' "
+         "against it and pass tools absolute YYYY-MM-DD dates.\n"
          "Employee: {employee_name} (employee_id: {employee_id})\n"
          "[USER_REQUEST_START]\n{request}\n[USER_REQUEST_END]"),
     ])
@@ -693,6 +706,7 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
                 fewshot_context=state.get("fewshot_context") or "",
                 rag_context=state.get("rag_context") or "",
                 history=format_history(state),
+                today=datetime.now().strftime("%A, %Y-%m-%d"),
                 employee_name=state["employee_name"],
                 employee_id=state.get("employee_id", ""),
                 request=state["request"],
@@ -915,6 +929,8 @@ MANAGER_PROMPT = ChatPromptTemplate.from_messages([
     ("human",
      "{rag_context}\n\n"
      "{history}\n"
+     "Today is {today}. Resolve relative dates against it and pass tools absolute "
+     "YYYY-MM-DD dates.\n"
      "Escalation reason: {escalation_reason}\n"
      "Employee: {employee_name}\n"
      "[USER_REQUEST_START]\n{request}\n[USER_REQUEST_END]\n"
@@ -931,6 +947,7 @@ def manager_agent(state: SupportRequest, config: RunnableConfig = None) -> dict:
         messages = MANAGER_PROMPT.format_messages(
             rag_context=state.get("rag_context") or "",
             history=format_history(state),
+            today=datetime.now().strftime("%A, %Y-%m-%d"),
             escalation_reason=state["escalation_reason"],
             employee_name=state["employee_name"],
             request=state["request"],

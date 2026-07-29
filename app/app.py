@@ -391,10 +391,12 @@ async def send_message(request: Request, message: str = Form(...)):
         "fallback_used": fallback_used,
         "message_id": message_id,
         "sources": result.get("rag_sources", []),
+        # The trail is already rendered for every user when /chat reloads history,
+        # so withholding it here only made the live reply inconsistent with the page.
+        "audit": audit,
     }
-    # Only expose internal details (audit trail, tool calls) to admins
+    # Raw tool-call list stays admin-only
     if user in ADMIN_EMAILS:
-        response_data["audit"] = audit
         response_data["tool_calls"] = result.get("tool_calls_made", [])
 
     return response_data

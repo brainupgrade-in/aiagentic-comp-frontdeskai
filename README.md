@@ -131,7 +131,7 @@ default namespace                     postgres namespace
 FrontDesk AI                          MCP Leave Server (:8001)
   HR Worker                 MCP/HTTP        ↓ psycopg2
   get_leave_balance_from_hr_system ──→  PostgreSQL (:5432)
-  (urllib JSON-RPC POST)                hr schema
+  (urllib JSON-RPC POST)                public schema
 ```
 
 `bash scripts/deploy-mcp.sh` deploys PostgreSQL + the server and runs a smoke test. Then ask *"How many

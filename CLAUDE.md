@@ -83,8 +83,8 @@ app/
 | `app/rag.py` | ChromaDB indexing of `app/data/policies/*.md` into the `unigps_policies` collection, retrieval with category filtering (ONNX embeddings, no torch). Persists to `$CHROMA_DIR` (default `/shared/chromadb`) |
 | `app/fewshot.py` | Few-shot memory — successful Q&A pairs in the `fewshot_examples` Chroma collection, retrieved per-category by semantic similarity and injected into domain worker prompts |
 | `app/observability.py` | OpenTelemetry metrics, Prometheus exporter, JSON logging, Langfuse integration |
-| `mcp/mcp-postgre/mcp_leave_server.py` | FastMCP server (streamable-http, port 8001) — `get_leave_balance` + `get_leave_usage` tools backed by PostgreSQL |
-| `mcp/postgre/configmap-init.yaml` | PostgreSQL init SQL — HR schema + 4 seed employees with leave data |
+| `mcp/mcp-postgre/mcp_leave_server.py` | FastMCP server (streamable-http, port 8001) — `get_leave_balance`, `get_leave_usage`, and `approve_leave` (records the request and deducts days atomically) backed by PostgreSQL. Unknown employee_ids are auto-provisioned with the default entitlement |
+| `mcp/postgre/configmap-init.yaml` | PostgreSQL init SQL — employees/leave_balances/leave_requests in the default `public` schema + 4 seed employees with leave data |
 | `scripts/deploy-mcp.sh` | Deploy MCP stack (PostgreSQL + MCP server) into `postgres` namespace, includes smoke test |
 
 ## Agent Categories
@@ -208,7 +208,7 @@ The full agentic cycle for adding a new capability, entirely via chat:
 
 ## MCP Leave Service
 
-Employee leave queries are handled by a remote MCP server in the `postgres` namespace backed by PostgreSQL.
+Employee leave queries are handled by a remote MCP server in the `postgres` namespace backed by PostgreSQL. Reads go through the HR worker (`get_leave_balance_from_hr_system`); writes go through `approve_leave_via_mcp`, which both the HR worker and the escalation **manager** node can call to approve leave directly in PostgreSQL.
 
 ```
 default namespace                        postgres namespace
@@ -217,7 +217,7 @@ HR Worker                    MCP/HTTP    MCP Leave Server (:8001)
 get_leave_balance_from_hr_system  ──────→  FastMCP · streamable-http
 (urllib JSON-RPC POST)                         ↓ psycopg2
                                          PostgreSQL (:5432)
-                                         hr schema · seed data
+                                         public schema · seed data
 ```
 
 **Deploy:** `bash scripts/deploy-mcp.sh` (PostgreSQL + MCP server + smoke test)

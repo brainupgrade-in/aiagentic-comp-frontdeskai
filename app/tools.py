@@ -771,11 +771,55 @@ def submit_expense_claim(amount: float, category: str, description: str, receipt
         conn.close()
 
 
+# Designations that carry expense-approval authority within the finance department.
+_EXPENSE_APPROVER_TITLES = ("lead", "manager", "director", "head", "vp", "chief")
+
+
+def _expense_approval_denial(conn, approver_id: str, claimant_id: str) -> str | None:
+    """Return a refusal message if approver_id may not decide claimant_id's claim, else None.
+
+    Authority comes from the employees table, never from the conversation: the
+    claimant's own manager, or a senior finance approver. Nobody decides their
+    own claim.
+    """
+    if approver_id == claimant_id:
+        return "You cannot approve or reject your own expense claim."
+
+    approver = conn.execute(
+        "SELECT department, designation FROM employees WHERE employee_id = ? AND is_active = 1",
+        (approver_id,),
+    ).fetchone()
+    if not approver:
+        return f"Approver '{approver_id}' not found or inactive."
+
+    claimant = conn.execute(
+        "SELECT manager_id FROM employees WHERE employee_id = ?", (claimant_id,)
+    ).fetchone()
+    if claimant and claimant["manager_id"] == approver_id:
+        return None
+
+    designation = (approver["designation"] or "").lower()
+    if approver["department"] == "finance" and any(t in designation for t in _EXPENSE_APPROVER_TITLES):
+        return None
+
+    return (
+        "You are not authorised to decide this claim. Only the claimant's manager or a "
+        "senior finance approver can approve or reject it."
+    )
+
+
 @tool
-def approve_expense_claim(claim_id: str, approver_id: str, status: str) -> str:
-    """Approve or reject an expense claim. status: 'approved' or 'rejected'. approver_id must be a valid employee (typically the claimant's manager)."""
+def approve_expense_claim(claim_id: str, status: str) -> str:
+    """Approve or reject an expense claim. status: 'approved' or 'rejected'.
+
+    The approver is always the logged-in employee — it cannot be supplied as an
+    argument. Only the claimant's manager or a senior finance approver may decide
+    a claim, and nobody may decide their own.
+    """
     if status not in ("approved", "rejected"):
         return "Status must be 'approved' or 'rejected'."
+
+    approver_id = _get_current_employee_id()
 
     conn = _get_db()
     try:
@@ -785,9 +829,9 @@ def approve_expense_claim(claim_id: str, approver_id: str, status: str) -> str:
         if row["status"] not in ("submitted", "under_review"):
             return f"Claim {claim_id} is already {row['status']} — cannot change status."
 
-        emp = conn.execute("SELECT 1 FROM employees WHERE employee_id = ? AND is_active = 1", (approver_id,)).fetchone()
-        if not emp:
-            return f"Approver '{approver_id}' not found or inactive."
+        denial = _expense_approval_denial(conn, approver_id, row["employee_id"])
+        if denial:
+            return denial
 
         from datetime import datetime
         now = datetime.now().isoformat()
