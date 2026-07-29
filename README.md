@@ -209,7 +209,8 @@ tracing: **[langfuse-setup.md](langfuse-setup.md)**.
   traversal protection
 - Prompt injection guardrails — delimiter-wrapped user input, PII detection/redaction in the QA gate
 - Admin access gated by `ADMIN_EMAILS`; tool identity comes from a server-set `ContextVar` the LLM
-  cannot influence — no tool accepts an `employee_id`, `approver_id` or `booked_by` argument
+  cannot influence — no tool accepts an `employee_id`, `approver_id` or `booked_by` argument, including
+  the remote MCP leave tools, so neither reads nor writes can be redirected to another employee
 - Approval authority is a separate check against the `employees` table: an expense claim can only be
   decided by the claimant's manager or a senior finance approver, and never by the claimant
 - SMTP password and secret skill config encrypted at rest with Fernet, key derived from `SECRET_KEY`

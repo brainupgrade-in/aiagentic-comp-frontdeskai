@@ -98,7 +98,7 @@ app/
 | `app/rag.py` | ChromaDB indexing of `app/data/policies/*.md` into the `unigps_policies` collection, retrieval with category filtering (ONNX embeddings, no torch). Persists to `$CHROMA_DIR` (default `/shared/chromadb`) |
 | `app/fewshot.py` | Few-shot memory — successful Q&A pairs in the `fewshot_examples` Chroma collection, retrieved per-category by semantic similarity and injected into domain worker prompts. Written by a 👍 via `/chat/feedback` when `_qualifies_for_fewshot` passes (confidence ≥ 7, not escalated, not fallback, category not general/blank); 👎 removes it from SQLite and Chroma. Memory is per-category and shared across users |
 | `app/observability.py` | OpenTelemetry metrics, Prometheus exporter, JSON logging, Langfuse integration. One process-wide Langfuse `CallbackHandler` (langfuse 2.x builds a client + consumer threads per handler, so per-request handlers leaked threads); per-request identity travels as `langfuse_metadata()` in the RunnableConfig; `flush_langfuse()` runs on shutdown; `JsonFormatter` emits every `extra=` field |
-| `mcp/mcp-postgre/mcp_leave_server.py` | FastMCP server (streamable-http, port 8001) — `get_leave_balance`, `get_leave_usage`, and `approve_leave` (records the request and deducts days atomically) backed by PostgreSQL. Unknown employee_ids are auto-provisioned with the default entitlement |
+| `mcp/mcp-postgre/mcp_leave_server.py` | FastMCP server (streamable-http, port 8001) — `get_leave_balance`, `get_leave_usage`, and `approve_leave` (records the request and deducts days atomically) backed by PostgreSQL. Unknown employee_ids are auto-provisioned with the default entitlement. The server itself trusts whatever `employee_id` it is given; the client-side tools in `app/tools.py` are what bind the call to the caller |
 | `mcp/postgre/configmap-init.yaml` | PostgreSQL init SQL — employees/leave_balances/leave_requests in the default `public` schema + 4 seed employees with leave data |
 | `scripts/deploy-mcp.sh` | Deploy MCP stack (PostgreSQL + MCP server) into `postgres` namespace, includes smoke test |
 
@@ -226,7 +226,7 @@ The full agentic cycle for adding a new capability, entirely via chat:
 
 ## MCP Leave Service
 
-Employee leave queries are handled by a remote MCP server in the `postgres` namespace backed by PostgreSQL. Reads go through the HR worker (`get_leave_balance_from_hr_system`); writes go through `approve_leave_via_mcp`, which both the HR worker and the escalation **manager** node can call to approve leave directly in PostgreSQL.
+Employee leave queries are handled by a remote MCP server in the `postgres` namespace backed by PostgreSQL. Reads go through the HR worker (`get_leave_balance_from_hr_system`); writes go through `approve_leave_via_mcp`, which both the HR worker and the escalation **manager** node can call to approve leave directly in PostgreSQL. Neither tool takes an `employee_id`: both derive it from the session via `_mcp_employee_id()`, so one employee cannot read or approve another's leave, and both call sites (HR worker, manager node) only ever act on the employee who made the request.
 
 ```
 default namespace                        postgres namespace
@@ -321,7 +321,7 @@ prometheus.io/path: "/metrics"
 - Skill config is stored in `system_config` with `skill.{name}.{key}` namespacing; secrets use `_enc` suffix and Fernet encryption
 - Admin routes use `_require_admin()` helper, gated by `ADMIN_EMAILS`
 - User input in prompts is wrapped in `[USER_REQUEST_START]`/`[USER_REQUEST_END]` delimiters
-- Tools never accept caller identity (`employee_id`, `approver_id`, `booked_by`) as an argument — it comes from the `current_user_email` ContextVar. Worker prompts must not instruct the model to pass one; MCP tools are the exception, since the remote roster is keyed by `employee_id`
+- **No tool accepts caller identity as an argument** (`employee_id`, `approver_id`, `booked_by`) — it always comes from the `current_user_email` ContextVar, including the MCP tools, which map it to the remote roster key via `_mcp_employee_id()` and refuse the call when the session has no identity. Worker prompts must not instruct the model to pass one
 - Worker and manager prompts inject the current date (`Today is …`) so relative dates like "tomorrow" resolve correctly — the model has no clock of its own
 - All SQL uses parameterized queries; column names are never constructed from user input
 - `app/app.py` uses `__file__`-relative paths for `StaticFiles` and `Jinja2Templates` (required when running from repo root as `python app/app.py`)

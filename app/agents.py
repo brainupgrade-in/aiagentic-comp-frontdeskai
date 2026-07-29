@@ -263,7 +263,8 @@ class WorkerResponse(BaseModel):
 
 class SupportRequest(TypedDict):
     employee_name: str
-    employee_id: str          # email prefix, e.g. "rajesh" for rajesh@unigps.in — use for tool calls
+    employee_id: str          # email prefix, e.g. "rajesh" for rajesh@unigps.in — prompt context only;
+                              # tools read the caller's identity from the current_user_email ContextVar
     request: str
     conversation_history: list[dict]  # prior turns: [{"role": "user"|"assistant", "content": "..."}]
     is_admin: bool  # whether the user is an admin (for skill_admin gating)
@@ -487,13 +488,15 @@ WORKER_CONFIGS = {
             "- Employee wants to APPLY for leave → act as the approving HR officer:\n"
             "  1. Call get_leave_balance_from_hr_system to verify the employee has sufficient balance.\n"
             "  2. If balance is sufficient and request is ≤10 days, call approve_leave_via_mcp "
-            "with employee_id, leave_type (casual/sick/earned/wfh), start_date, end_date (YYYY-MM-DD), "
+            "with leave_type (casual/sick/earned/wfh), start_date, end_date (YYYY-MM-DD), "
             "and reason. Infer exact dates from relative expressions using today's date.\n"
             "  3. Confirm approval to the employee with the reference number and remaining balance.\n"
             "  4. If balance is insufficient, inform the employee and suggest alternatives.\n"
             "  5. If approve_leave_via_mcp reports the HR system is unreachable, call apply_leave "
             "instead — it records the request locally for HR review.\n"
-            "Do NOT just explain policy — check balance and approve when the request is valid.\n\n"
+            "Do NOT just explain policy — check balance and approve when the request is valid.\n"
+            "Never pass an employee_id — every tool, including the HR system tools, acts on the "
+            "caller's own record. If asked about someone else's leave, say you cannot access it.\n\n"
             "Escalate if: >10 days leave request, policy exceptions, or special circumstances."
         ),
         "can_escalate": True,
@@ -916,8 +919,9 @@ _MANAGER_SYSTEM = (
     "LEAVE APPROVAL WORKFLOW — follow these steps in order:\n"
     "1. Call get_leave_balance_from_hr_system to check the employee's current balance.\n"
     "2. If balance is sufficient and the request is reasonable, call approve_leave_via_mcp "
-    "with employee_id, leave_type (casual/sick/earned/wfh), start_date, end_date (YYYY-MM-DD), "
-    "and reason. This records the approval in the HR database.\n"
+    "with leave_type (casual/sick/earned/wfh), start_date, end_date (YYYY-MM-DD), and reason. "
+    "This records the approval in the HR database against the employee who made the request — "
+    "the tools take no employee_id and always act on that person's record.\n"
     "3. Confirm the approval to the employee, including the reference number and remaining balance.\n"
     "4. If balance is insufficient or the request is against policy, explain why and decline.\n\n"
     "For non-leave escalations: provide a definitive policy answer in 2-3 sentences.\n\n"

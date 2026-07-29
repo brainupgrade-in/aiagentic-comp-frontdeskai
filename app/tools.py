@@ -1659,17 +1659,31 @@ FILE_TOOLS = [read_local_file, write_local_file]
 
 # ========== TOOL REGISTRY ==========
 
+def _mcp_employee_id() -> str | None:
+    """The caller's employee_id for MCP calls, or None if the session has no identity.
+
+    The remote HR roster is keyed by the username portion of the email, which is
+    exactly what `_get_current_employee_id()` returns. Deriving it here — rather
+    than accepting it as a tool argument — is what stops one employee reading or
+    approving another's leave.
+    """
+    employee_id = _get_current_employee_id()
+    return None if employee_id in ("", "unknown") else employee_id
+
+
 @tool
-def get_leave_balance_from_hr_system(employee_id: str) -> str:
-    """Get an employee's leave balance from the HR system (PostgreSQL via MCP server).
+def get_leave_balance_from_hr_system() -> str:
+    """Get the logged-in employee's leave balance from the HR system (PostgreSQL via MCP server).
 
     This tool calls the remote HR MCP server which reads from the company's
-    PostgreSQL HR database — use this for accurate, real-time leave data.
-
-    Args:
-        employee_id: Username portion of the employee email
-                     (e.g. 'alice' for alice@unigps.in).
+    PostgreSQL HR database — use this for accurate, real-time leave data. It
+    always reads the caller's own record; there is no way to target another
+    employee.
     """
+    employee_id = _mcp_employee_id()
+    if not employee_id:
+        return "Unable to determine your identity. Please log out and log back in."
+
     payload = json.dumps({
         "jsonrpc": "2.0",
         "method": "tools/call",
@@ -1713,18 +1727,24 @@ def get_leave_balance_from_hr_system(employee_id: str) -> str:
 
 @tool
 def approve_leave_via_mcp(
-    employee_id: str,
     leave_type: str,
     start_date: str,
     end_date: str,
     reason: str = "",
 ) -> str:
-    """Approve a leave request and record it in the HR PostgreSQL database via MCP.
+    """Approve the logged-in employee's leave request and record it in the HR PostgreSQL database via MCP.
 
-    Use this tool when an employee requests leave and the HR agent decides to approve it.
-    It validates balance, records the approved request, and deducts days — all atomically.
-    leave_type must be one of: casual, sick, earned, wfh. Dates in YYYY-MM-DD format.
+    Use this tool when an employee requests leave and the HR agent (or the manager
+    handling an escalation) decides to approve it. It validates balance, records the
+    approved request, and deducts days — all atomically. The request is always
+    recorded against the caller's own record; leave cannot be approved on someone
+    else's behalf. leave_type must be one of: casual, sick, earned, wfh. Dates in
+    YYYY-MM-DD format.
     """
+    employee_id = _mcp_employee_id()
+    if not employee_id:
+        return "Unable to determine your identity. Please log out and log back in."
+
     payload = json.dumps({
         "jsonrpc": "2.0",
         "method": "tools/call",
