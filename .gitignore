@@ -9,3 +9,5 @@ app/data/.sqlite/
 app/data/.frontdeskai/
 *.db
 .claude/
+# curl cookie jars from manual API testing — contain live JWT session tokens
+cookies*.txt
