@@ -7,7 +7,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/*
 
 COPY app/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# BuildKit cache mount: keeps the pip download cache across builds so editing
+# requirements.txt re-resolves without re-downloading chromadb/onnxruntime.
+# --no-cache-dir is deliberately absent — it would defeat the mount. The cache
+# lives in the builder, not in a layer, so the image stays the same size.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
 
 COPY app/ .
 

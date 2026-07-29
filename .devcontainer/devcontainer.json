@@ -30,6 +30,11 @@
     }
   },
 
+  // Split so Codespaces prebuilds can cache the expensive half: prebuilds run up
+  // to updateContentCommand and explicitly skip postCreateCommand.
+  //   onCreateCommand   → static artifacts (kind binary, node image)  — prebuilt
+  //   postCreateCommand → live state (kind cluster, .env)             — per-launch
+  "onCreateCommand": "bash .devcontainer/on-create.sh",
   "postCreateCommand": "bash .devcontainer/setup.sh",
 
   // Only ports with a matching kind extraPortMapping are listed — see

@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "==> Installing kind..."
-KIND_VERSION="v0.32.0"
-curl -Lo /tmp/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
-sudo install -o root -g root -m 0755 /tmp/kind /usr/local/bin/kind
-rm /tmp/kind
+# Runs as postCreateCommand — NOT captured by Codespaces prebuilds, so this
+# executes on every codespace launch. Keep it to work that genuinely cannot be
+# baked into a snapshot; cacheable setup belongs in .devcontainer/on-create.sh
+# (kind binary, node image pre-pull).
 
 # App dependencies are NOT installed here on purpose. The app runs only in the
 # kind cluster, where Containerfile installs app/requirements.txt into the image.
