@@ -21,7 +21,14 @@ from rag import index_documents, POLICIES_DIR
 from skills import load_all_skills
 from tools import HISTORY_DB
 import observability as obs
-from observability import init_observability, get_metrics_app, get_tracer, get_langfuse_handler
+from observability import (
+    init_observability,
+    get_metrics_app,
+    get_tracer,
+    get_langfuse_handler,
+    langfuse_metadata,
+    flush_langfuse,
+)
 
 load_dotenv()
 
@@ -133,6 +140,7 @@ async def lifespan(application: FastAPI):
     skill_count = load_all_skills()
     obs.logger.info("Skills loaded", extra={"skills": skill_count})
     yield
+    flush_langfuse()
     obs.logger.info("FrontDesk AI shutting down")
 
 
@@ -295,10 +303,11 @@ async def send_message(request: Request, message: str = Form(...)):
                     compiled = graph.compile(checkpointer=checkpointer)
                     # Pass Langfuse handler via LangGraph RunnableConfig so it
                     # propagates automatically to all child runnables (LLM calls).
-                    lf_handler = get_langfuse_handler(user_id=user, session_id=user)
+                    lf_handler = get_langfuse_handler()
                     config: dict = {"configurable": {"thread_id": user}}
                     if lf_handler:
                         config["callbacks"] = [lf_handler]
+                        config["metadata"] = langfuse_metadata(user_id=user, session_id=user)
 
                     initial_state = {
                         "employee_name": employee_name,

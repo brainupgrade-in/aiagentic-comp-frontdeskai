@@ -4,7 +4,6 @@ import json
 import logging
 import time
 from contextlib import contextmanager
-from contextvars import ContextVar  # noqa: F401 — used at runtime
 
 import os
 
@@ -28,6 +27,12 @@ except ImportError:
 
 # ── JSON Log Formatter ──────────────────────────────────────────────
 
+# Attributes every LogRecord carries — used to isolate caller-supplied extras.
+_STD_LOGRECORD_ATTRS = set(
+    logging.LogRecord("", 0, "", 0, "", None, None).__dict__
+) | {"message", "asctime", "taskName"}
+
+
 class JsonFormatter(logging.Formatter):
     """Emit JSON log lines with trace_id and span_id correlation."""
 
@@ -45,16 +50,16 @@ class JsonFormatter(logging.Formatter):
             "trace_id": trace_id,
             "span_id": span_id,
         }
-        # Attach extra fields (agent, category, etc.)
-        for key in ("agent", "category", "employee", "duration_ms", "tokens"):
-            val = getattr(record, key, None)
-            if val is not None:
+        # Attach every extra= field (agent, category, langfuse_host, …) —
+        # anything the caller passed that isn't a standard LogRecord attribute.
+        for key, val in record.__dict__.items():
+            if key not in _STD_LOGRECORD_ATTRS and key not in log and val is not None:
                 log[key] = val
 
         if record.exc_info and record.exc_info[0]:
             log["exception"] = self.formatException(record.exc_info)
 
-        return json.dumps(log)
+        return json.dumps(log, default=str)
 
 
 # ── Module-level references (populated by init_observability) ────────
@@ -73,6 +78,7 @@ request_duration = None
 
 # Langfuse
 langfuse_enabled = False
+_lf_handler = None
 
 logger = logging.getLogger("frontdeskai")
 
@@ -204,34 +210,46 @@ def trace_llm_call(agent_name: str):
             raise
 
 
-def get_langfuse_handler(user_id: str = "", session_id: str = ""):
-    """Create a Langfuse callback handler for a single request.
+def get_langfuse_handler():
+    """Return the process-wide Langfuse callback handler (None if disabled).
 
-    Returns None if Langfuse is not configured or not available.
-    Each invocation creates a fresh handler so traces are grouped per request.
+    One handler is shared by every request: in langfuse 2.x each
+    CallbackHandler builds its own client with its own consumer threads and
+    HTTP connection, so constructing one per chat leaked threads and left
+    queued events with no one to flush them. Per-request identity travels in
+    the RunnableConfig metadata instead — see `langfuse_metadata()`.
     """
+    global _lf_handler
     if not langfuse_enabled or LangfuseCallbackHandler is None:
         return None
-    return LangfuseCallbackHandler(
-        user_id=user_id,
-        session_id=session_id,
-    )
+    if _lf_handler is None:
+        _lf_handler = LangfuseCallbackHandler()
+        # Log once whether the keys actually authenticate — otherwise a wrong
+        # key or region silently produces zero traces.
+        try:
+            ok = _lf_handler.auth_check()
+        except Exception as e:
+            ok = f"error: {e}"
+        logger.info(
+            "Langfuse handler ready",
+            extra={"langfuse_host": os.environ.get("LANGFUSE_HOST", ""), "auth_check": ok},
+        )
+    return _lf_handler
 
 
-# Per-request Langfuse handler stored in a ContextVar so node functions
-# can access it without needing to pass it through every call signature.
-_langfuse_handler_var: ContextVar = ContextVar("langfuse_handler", default=None)
+def langfuse_metadata(user_id: str = "", session_id: str = "") -> dict:
+    """RunnableConfig metadata that tags a Langfuse trace with user + session."""
+    return {"langfuse_user_id": user_id, "langfuse_session_id": session_id}
 
 
-def set_langfuse_handler(handler) -> None:
-    """Store the current request's Langfuse handler in the context."""
-    _langfuse_handler_var.set(handler)
-
-
-def get_lf_callbacks() -> list:
-    """Return [handler] for the current request, or [] if Langfuse is disabled."""
-    h = _langfuse_handler_var.get(None)
-    return [h] if h else []
+def flush_langfuse() -> None:
+    """Send anything still queued — called on shutdown so a rollout doesn't drop traces."""
+    if _lf_handler is None:
+        return
+    try:
+        _lf_handler.langfuse.flush()
+    except Exception:
+        logger.warning("Langfuse flush failed", exc_info=True)
 
 
 def get_metrics_app():

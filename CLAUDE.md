@@ -173,6 +173,17 @@ kubectl logs deployment/frontdeskai
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | `http://tempo.monitoring.svc.cluster.local:4317` |
 | `LOG_LEVEL` | No | `INFO` |
 | `SEED_DEMO_DATA` | No | `false` — set to `true` to pre-populate employees, tickets, expenses, leave, rooms, payslips for demos |
+| `LANGFUSE_SECRET_KEY` | No (LLM tracing) | — all three Langfuse vars must be set, else tracing is disabled |
+| `LANGFUSE_PUBLIC_KEY` | No (LLM tracing) | — |
+| `LANGFUSE_HOST` | No (LLM tracing) | — region-specific: `https://us.cloud.langfuse.com` or `https://cloud.langfuse.com` (EU); traces are only visible in the UI of the matching region |
+
+**Langfuse tracing** — the keys reach the pod through the `frontdeskai-secret` K8s secret, which is (re)built by `scripts/deploy.sh` from `.env`. Editing `.env` alone changes nothing in the cluster; run `bash scripts/deploy.sh` (or `bash scripts/update-secret.sh`) afterwards. Verify from the logs:
+
+```bash
+kubectl logs deployment/frontdeskai | grep -i langfuse
+# "Langfuse enabled"  … keys present at startup
+# "Langfuse handler ready" … with "auth_check": true after the first chat
+```
 
 **LLM defaults (overridable at runtime via admin chat):**
 - Primary: `ollama` / `gemma4:cloud` (Ollama Cloud — `https://api.ollama.com`)
