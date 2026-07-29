@@ -16,12 +16,16 @@
 Open the repo on GitHub → **Code → Codespaces → Create codespace on main**
 
 The devcontainer automatically:
-- Installs Python 3.12, kubectl, helm, kind, Docker-in-Docker
+- Installs Python 3.13, kubectl, helm, kind, Docker-in-Docker
 - Creates a local kind Kubernetes cluster named `frontdeskai`
-- Installs all Python dependencies into the system Python
+- Seeds `.env` from `.env.example` (you still need to add your API keys)
 - Creates `/shared/.sqlite` for persistent storage
 
-Wait for the setup to finish (watch the terminal — it prints "Setup complete" when done).
+The app's Python dependencies are **not** installed in the Codespace itself — they
+are baked into the container image by `Containerfile` and run inside the kind
+cluster. Deploy with `scripts/deploy.sh` rather than running `python app/app.py`.
+
+Wait for the setup to finish (watch the terminal — it prints a "Devcontainer notes" banner when done).
 
 ### 2. Configure API Keys
 
@@ -181,4 +185,4 @@ bash scripts/deploy.sh
 
 **Codespace enters recovery mode (Docker-in-Docker fails):**
 
-Ensure the devcontainer base image is `mcr.microsoft.com/devcontainers/python:3.12-bookworm` (not `bullseye`). Delete the Codespace and create a new one to pick up the fix.
+Ensure the devcontainer base image is `mcr.microsoft.com/devcontainers/python:3.13-bookworm` (not `bullseye`). Delete the Codespace and create a new one to pick up the fix.

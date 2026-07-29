@@ -1,6 +1,8 @@
 {
   "name": "FrontDesk AI",
-  "image": "mcr.microsoft.com/devcontainers/python:3.12-bookworm",
+  // Keep the Python minor in sync with Containerfile (python:3.13-slim) so the
+  // app behaves the same run directly here and deployed to kind.
+  "image": "mcr.microsoft.com/devcontainers/python:3.13-bookworm",
 
   // Minimum 4-core / 8GB RAM recommended: kind control plane (~500MB)
   // + Docker daemon (~200MB) + FrontDesk AI with ONNX/ChromaDB (~1GB) = ~2GB+
@@ -30,13 +32,14 @@
 
   "postCreateCommand": "bash .devcontainer/setup.sh",
 
-  "forwardPorts": [8000, 9090, 3000, 5000, 4317],
+  // Only ports with a matching kind extraPortMapping are listed — see
+  // scripts/create-kind-cluster.sh. Prometheus and Tempo have no NodePort and
+  // are reachable only via `kubectl port-forward`.
+  "forwardPorts": [8000, 9090, 3000],
   "portsAttributes": {
-    "8000": { "label": "FrontDesk AI",       "onAutoForward": "openBrowser" },
-    "9090": { "label": "Prometheus",          "onAutoForward": "notify" },
-    "3000": { "label": "Grafana",             "onAutoForward": "notify" },
-    "5000": { "label": "Docker Registry",     "onAutoForward": "silent" },
-    "4317": { "label": "OTEL/Tempo (gRPC)",   "onAutoForward": "silent" }
+    "8000": { "label": "FrontDesk AI",           "onAutoForward": "openBrowser" },
+    "9090": { "label": "FrontDesk AI metrics",   "onAutoForward": "silent" },
+    "3000": { "label": "Grafana",                "onAutoForward": "notify" }
   },
 
   "customizations": {
@@ -62,15 +65,14 @@
         "eamodio.gitlens"
       ],
       "settings": {
+        // setup.sh installs into the image's system Python — there is no venv here
         "python.defaultInterpreterPath": "/usr/local/bin/python",
-        "python.terminal.activateEnvironment": true,
         "terminal.integrated.defaultProfile.linux": "bash"
       }
     }
   },
 
   "remoteEnv": {
-    "KUBECONFIG": "/home/vscode/.kube/config",
     "SQLITE_DIR": "/shared/.sqlite"
   }
 }

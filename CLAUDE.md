@@ -119,7 +119,8 @@ The agentic loop: skill code → filesystem, skill config → DB, LLM/SMTP confi
 # Run locally
 python app/app.py
 # Access: http://localhost:8000 (local) or http://localhost:8000 (kind NodePort — no port-forward)
-# Grafana: http://localhost:3000 | Prometheus: http://localhost:9090
+# Grafana: http://localhost:3000 | App metrics: http://localhost:9090/metrics
+# Prometheus UI has no NodePort: kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9091:9090
 
 # Verify auth module
 cd app && python -c "from auth import hash_password, verify_password; h,s = hash_password('test'); print(verify_password('test',h,s))"
@@ -232,9 +233,9 @@ get_leave_balance_from_hr_system  ──────→  FastMCP · streamable-h
 **Cluster name:** always `frontdeskai`. Both setup paths converge on this name so `deploy.sh` works unchanged.
 
 **Codespace** — devcontainer (`.devcontainer/`) provisions automatically:
-- Base image: `mcr.microsoft.com/devcontainers/python:3.12-bookworm` (Bookworm required — Bullseye has expired Yarn GPG key that breaks Docker-in-Docker install)
+- Base image: `mcr.microsoft.com/devcontainers/python:3.13-bookworm` — Python minor kept in sync with `Containerfile` (`python:3.13-slim`); Bookworm required (Bullseye has an expired Yarn GPG key that breaks the Docker-in-Docker install)
 - Features: `docker-in-docker:2`, `kubectl-helm-minikube:1`
-- `postCreateCommand`: `.devcontainer/setup.sh` — installs kind binary, pip deps, creates cluster, creates `/shared/.sqlite`
+- `postCreateCommand`: `.devcontainer/setup.sh` — installs kind binary, seeds `.env`, then delegates to `scripts/create-kind-cluster.sh` (cluster + `/shared/.sqlite`). App deps are deliberately **not** pip-installed here; they live in the image built from `Containerfile`, so the app runs only in the kind cluster.
 
 **cloud-labs / localhost** — run once manually:
 ```bash

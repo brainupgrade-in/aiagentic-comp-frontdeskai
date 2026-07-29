@@ -2,61 +2,36 @@
 set -euo pipefail
 
 echo "==> Installing kind..."
-KIND_VERSION="v0.27.0"
+KIND_VERSION="v0.32.0"
 curl -Lo /tmp/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
 sudo install -o root -g root -m 0755 /tmp/kind /usr/local/bin/kind
 rm /tmp/kind
 
-echo "==> Installing Python dependencies..."
-pip install --quiet -r app/requirements.txt
+# App dependencies are NOT installed here on purpose. The app runs only in the
+# kind cluster, where Containerfile installs app/requirements.txt into the image.
+# Installing them again in the devcontainer would just slow down Codespace
+# creation (chromadb + onnxruntime are heavy). Uncomment if you ever want to run
+# `python app/app.py` directly in the Codespace, or want Pylance to resolve the
+# third-party imports:
+# echo "==> Installing Python dependencies..."
+# pip install --quiet -r app/requirements.txt
 
-echo "==> Creating /shared/.sqlite directory..."
-sudo mkdir -p /shared/.sqlite
-sudo chown vscode:vscode /shared/.sqlite
+if [ ! -f .env ]; then
+  echo "==> Seeding .env from .env.example (set OLLAMA_API_KEY + GROQ_API_KEY)..."
+  cp .env.example .env
+fi
 
-echo "==> Creating kind cluster 'frontdeskai'..."
-# extraPortMappings bind NodePorts to localhost so Codespace forwardPorts works
-# without kubectl port-forward:
-#   30800 → localhost:8000  (FrontDesk AI)
-#   30300 → localhost:3000  (Grafana)
-#   30900 → localhost:9090  (Prometheus)
-cat <<'KINDCFG' | kind create cluster --name frontdeskai --config=- || echo "kind cluster already exists, skipping"
-kind: Cluster
-apiVersion: kind.x-k8s.io/v1alpha4
-nodes:
-  - role: control-plane
-    extraPortMappings:
-      - containerPort: 30800
-        hostPort: 8000
-        protocol: TCP
-      - containerPort: 30300
-        hostPort: 3000
-        protocol: TCP
-      - containerPort: 30900
-        hostPort: 9090
-        protocol: TCP
-KINDCFG
-
-echo "==> Cluster ready:"
-kubectl get nodes
+# Cluster creation lives in scripts/create-kind-cluster.sh so the Codespace and
+# localhost paths stay identical — do not duplicate the kind config here.
+bash scripts/create-kind-cluster.sh frontdeskai
 
 echo ""
 echo "=========================================================="
-echo " FrontDesk AI devcontainer ready"
+echo " Devcontainer notes (see the steps printed above)"
 echo "=========================================================="
-echo ""
-echo " 1. Deploy app to kind:"
-echo "      bash scripts/deploy.sh"
-echo ""
-echo " 2. Install observability stack (Prometheus, Grafana,"
-echo "    Loki, Promtail, Tempo — fully correlated):"
-echo "      bash scripts/install-observability.sh"
-echo ""
-echo " 3. Access (no port-forward needed — NodePort + extraPortMappings):"
-echo "      FrontDesk AI → http://localhost:8000"
-echo "      Grafana       → http://localhost:3000  (agenticai / agentgrow.io)"
-echo "      Prometheus    → http://localhost:9090"
-echo ""
-echo " 4. Run app locally (without k8s):"
-echo "      python app/app.py"
+echo " - The app runs in the kind cluster only — deploy it with scripts/deploy.sh."
+echo "   App deps are baked into the image by Containerfile and are deliberately"
+echo "   NOT installed in this devcontainer, so 'python app/app.py' will not work"
+echo "   here (see the commented pip install in .devcontainer/setup.sh)."
+echo " - Edit .env to set OLLAMA_API_KEY + GROQ_API_KEY before deploying."
 echo "=========================================================="

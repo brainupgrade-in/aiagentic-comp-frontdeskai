@@ -394,11 +394,17 @@ rate(frontdeskai_agent_errors_total[5m])
 
 ## Access
 
-No `kubectl port-forward` needed — the kind cluster is created with `extraPortMappings`
-and all services use NodePort, so ports bind directly to `localhost` in the Codespace.
+The kind cluster is created with `extraPortMappings`, so services that expose a
+NodePort bind directly to `localhost` in the Codespace — no `kubectl port-forward`.
 
 | Service | URL | NodePort |
 |---------|-----|----------|
 | FrontDesk AI | http://localhost:8000 | 30800 |
 | Grafana | http://localhost:3000 (agenticai / agentgrow.io) | 30300 |
-| Prometheus | http://localhost:9090 | 30900 |
+| FrontDesk AI metrics | http://localhost:9090/metrics | 30900 |
+
+Prometheus and Tempo have no NodePort — reach them with a port-forward:
+
+```bash
+kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9091:9090
+```
