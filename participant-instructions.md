@@ -5,7 +5,7 @@
 - An **Ollama Cloud API key** (primary LLM) — sign up at https://ollama.com
 - A **Groq API key** (fallback LLM, recommended) — free tier at https://console.groq.com
 - **Option A (recommended):** GitHub account to launch a Codespace
-- **Option B:** Local machine with Docker and Python 3.12+
+- **Option B:** Local machine with Docker and Python 3.13 (matches the `Containerfile` base image)
 
 ---
 
@@ -67,6 +67,23 @@ Access Grafana directly (NodePort — no port-forward needed):
 http://localhost:3000  (agenticai / agentgrow.io)
 ```
 
+Prometheus and Tempo have no NodePort — reach them with a port-forward:
+```bash
+kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9091:9090
+```
+
+### 6. Install the MCP Leave Service (Optional)
+
+Needed for the "how many leaves do I have left?" demo, which routes through a remote MCP server
+backed by PostgreSQL instead of the local SQLite tools.
+
+```bash
+bash scripts/deploy-mcp.sh
+```
+
+Deploys PostgreSQL + the MCP Leave Server into the `postgres` namespace and runs a
+cross-namespace smoke test.
+
 ---
 
 ## Option B: Local Machine (without Kubernetes)
@@ -97,28 +114,27 @@ python app/app.py
 # Install kind (if not installed)
 curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64 && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind
 
-# Create kind cluster with NodePort mappings
-cat <<'EOF' | kind create cluster --name frontdeskai --config=-
-kind: Cluster
-apiVersion: kind.x-k8s.io/v1alpha4
-nodes:
-  - role: control-plane
-    extraPortMappings:
-      - containerPort: 30800
-        hostPort: 8000
-        protocol: TCP
-      - containerPort: 30300
-        hostPort: 3000
-        protocol: TCP
-      - containerPort: 30900
-        hostPort: 9090
-        protocol: TCP
-EOF
+# One-time: create the 'frontdeskai' cluster with NodePort mappings + /shared/.sqlite
+bash scripts/create-kind-cluster.sh
 
 # Deploy app
 bash scripts/deploy.sh
 
 # Access: http://localhost:8000  (NodePort — no port-forward needed)
+```
+
+`create-kind-cluster.sh` needs passwordless sudo to create and chown `/shared`:
+
+```bash
+echo "$USER ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/$USER
+```
+
+If you plan to install the observability stack, raise the host inotify limits first — Promtail
+will otherwise `CrashLoopBackOff` with `too many open files` (add to `/etc/sysctl.conf` to persist):
+
+```bash
+sudo sysctl fs.inotify.max_user_instances=512
+sudo sysctl fs.inotify.max_user_watches=524288
 ```
 
 ---
@@ -166,20 +182,8 @@ bash scripts/update-secret.sh
 **kind cluster not found:**
 ```bash
 kind get clusters
-# Recreate if missing (with NodePort mappings — required for localhost access)
-cat <<'EOF' | kind create cluster --name frontdeskai --config=-
-kind: Cluster
-apiVersion: kind.x-k8s.io/v1alpha4
-nodes:
-  - role: control-plane
-    extraPortMappings:
-      - containerPort: 30800
-        hostPort: 8000
-      - containerPort: 30300
-        hostPort: 3000
-      - containerPort: 30900
-        hostPort: 9090
-EOF
+# Recreate if missing (the script sets the NodePort mappings required for localhost access)
+bash scripts/create-kind-cluster.sh
 bash scripts/deploy.sh
 ```
 

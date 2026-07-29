@@ -10,12 +10,14 @@
 
 FrontDesk AI's `finance` worker currently handles `get_expense_status`, `submit_expense_claim`, and `get_payslip` (all internal HR data). This skill adds two OCI capabilities:
 
-1. **Usage reports** — actual cloud spend broken down by service/compartment (via `oci-usage-mcp-server`)
-2. **Pricing estimates** — on-demand SKU pricing queries for cost planning (via `oci-pricing-mcp-server`)
+1. **Usage reports** — actual cloud spend broken down by service/compartment (OCI Usage API)
+2. **Pricing estimates** — on-demand SKU pricing queries for cost planning (public OCI pricing REST API, no auth)
 
-OCI MCP Servers used:
-- [`oracle/mcp` → `src/oci-usage-mcp-server`](https://github.com/oracle/mcp/tree/main/src/oci-usage-mcp-server)
-- [`oracle/mcp` → `src/oci-pricing-mcp-server`](https://github.com/oracle/mcp/tree/main/src/oci-pricing-mcp-server)
+Both go through the OCI Python SDK / plain HTTP directly, matching the pattern already shipped in
+`skills/oci_compute.py`. Oracle's [`oci-usage-mcp-server`](https://github.com/oracle/mcp/tree/main/src/oci-usage-mcp-server)
+and [`oci-pricing-mcp-server`](https://github.com/oracle/mcp/tree/main/src/oci-pricing-mcp-server)
+are useful references for the API surface, but running them would add a network hop with no
+functional benefit.
 
 ---
 
@@ -27,9 +29,9 @@ A single dynamic skill file: `/shared/.frontdeskai/skills/oci_finance.py`
 
 | Tool | OCI Source | Description |
 |------|-----------|-------------|
-| `oci_get_cloud_usage` | `oci-usage-mcp-server` | Get OCI usage/spend for a date range, grouped by service |
-| `oci_list_usage_reports` | `oci-usage-mcp-server` | List available usage report files in Object Storage |
-| `oci_get_price` | `oci-pricing-mcp-server` | Get price for a specific OCI service by name or SKU |
+| `oci_get_cloud_usage` | Usage API (SDK) | Get OCI usage/spend for a date range, grouped by service |
+| `oci_list_usage_reports` | Object Storage (SDK) | List available usage report files in Object Storage |
+| `oci_get_price` | Public pricing API (HTTP) | Get price for a specific OCI service by name or SKU |
 | `oci_estimate_cost` | Composite | Estimate monthly cost for N units of a service |
 
 ---
@@ -91,9 +93,10 @@ def _get_oci_config() -> dict:
 
 ## Implementation Steps
 
-### Step 1 — OCI SDK (shared prerequisite)
+### Step 1 — OCI SDK (shared prerequisite — already done)
 
-`oci>=2.120.0` in `requirements.txt`. If `oci_support_skill` is implemented first, no changes needed — same SDK, no volume mounts required for either skill.
+`oci>=2.120.0` is already in `app/requirements.txt` and baked into the image by `skills/oci_compute.py`.
+Nothing to do; no volume mounts required.
 
 ### Step 2 — Understand OCI Usage Report API
 
@@ -250,7 +253,9 @@ except urllib.error.URLError as e:
 
 | File | Change |
 |------|--------|
-| `requirements.txt` | Add `oci>=2.120.0` (shared — skip if oci_support_skill already added it) |
 | `/shared/.frontdeskai/skills/oci_finance.py` | New skill file (installed at runtime via admin chat) |
 
-No changes to `deployment.yaml` — credentials live entirely in the `system_config` DB.
+`oci>=2.120.0` is already in `app/requirements.txt` and baked into the image — no dependency change
+needed. No changes to `deployment.yaml` either; credentials live entirely in the `system_config` DB.
+See [`feature/ociconnectivity.md`](../feature/ociconnectivity.md) for the shared OCI auth design and
+the `_get_oci_config()` helper already proven out by `skills/oci_compute.py`.

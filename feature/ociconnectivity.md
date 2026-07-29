@@ -2,9 +2,27 @@
 
 ## Overview
 
-FrontDesk AI integrates with Oracle Cloud Infrastructure (OCI) through three dynamic skills that enable employees to manage cloud operations, track support incidents, and query cloud spend — entirely through conversational chat. No OCI Console access required.
+FrontDesk AI integrates with Oracle Cloud Infrastructure (OCI) through dynamic skills that let employees manage cloud operations, track support incidents, and query cloud spend — entirely through conversational chat. No OCI Console access required.
 
 All OCI credentials are configured at runtime via admin chat and stored encrypted in the `system_config` database. No Kubernetes Secrets, volume mounts, or pod restarts are needed to add or rotate credentials.
+
+## Status
+
+| Skill | State | Source |
+|-------|-------|--------|
+| `oci_compute` | **Built** — ships in the repo | [`skills/oci_compute.py`](../skills/oci_compute.py), reference in [`skills/oci_compute.md`](../skills/oci_compute.md) |
+| `oci_support` | **Designed, not built** | Plan: [`todo/oci_support_skill.md`](../todo/oci_support_skill.md) |
+| `oci_finance` | **Designed, not built** | Plan: [`todo/oci_finance_skill.md`](../todo/oci_finance_skill.md) |
+
+This document describes the shared design across all three. The `oci_support` and `oci_finance`
+sections below specify intended behaviour — the tools they list do not exist yet.
+
+The one shared prerequisite is already in place: `oci>=2.120.0` is declared in `app/requirements.txt`
+and baked into the container image. Verify inside the pod with:
+
+```bash
+kubectl exec deployment/frontdeskai -- python -c "import oci; print(oci.__version__)"
+```
 
 ---
 
@@ -39,24 +57,6 @@ Admin chat → set_skill_config(..., is_secret=True)
                   ▼
          OCI SDK client (ComputeClient / IncidentClient / UsageapiClient)
 ```
-
----
-
-## SDK Installation
-
-OCI Python SDK `>=2.120.0` is declared in `app/requirements.txt` and installed in the container image.
-
-**Verified version in running pod:**
-```
-2.170.0
-```
-
-Verification command:
-```bash
-kubectl exec deployment/frontdeskai -- python -c "import oci; print(oci.__version__)"
-```
-
-No changes were made to `deployment.yaml`, Kubernetes Secrets, or volume mounts. The SDK is the only addition.
 
 ---
 
@@ -100,7 +100,7 @@ The `private_key` is encrypted immediately when `set_skill_config(..., is_secret
 
 ## Skills
 
-### 1. `oci_support_skill` — Support Ticket Automation
+### 1. `oci_support_skill` — Support Ticket Automation _(designed, not built)_
 
 **Worker:** `tech`  
 **OCI Service:** CIMS (Customer Incident Management System)
@@ -149,7 +149,7 @@ Employee: "Show all open OCI support cases"
 
 ---
 
-### 2. `oci_finance_skill` — Cloud Cost Visibility
+### 2. `oci_finance_skill` — Cloud Cost Visibility _(designed, not built)_
 
 **Worker:** `finance`, `analytics`  
 **OCI Services:** Usage API, Object Storage (usage reports), Public Pricing API
@@ -207,10 +207,11 @@ Employee: "Compare Q1 vs Q4 compute spend"
 
 ---
 
-### 3. `oci_compute_skill` — Developer VM Self-Service
+### 3. `oci_compute_skill` — Developer VM Self-Service _(built)_
 
-**Worker:** `tech`  
-**OCI Service:** Core Compute
+**Worker:** `tech`, `skill_admin`  
+**OCI Service:** Core Compute  
+**Source:** [`skills/oci_compute.py`](../skills/oci_compute.py) — see [`skills/oci_compute.md`](../skills/oci_compute.md) for the full reference
 
 #### Tools
 
@@ -285,23 +286,24 @@ Admin: "Provision a 4-OCPU 32GB instance named 'new-hire-dev' for Priya"
 
 ## Installing Skills
 
-All three skills are installed at runtime via admin chat — no code changes or redeployment required.
+OCI skills are installed at runtime — no image rebuild or redeployment required.
 
-### Method 1 — Admin chat (recommended)
+### Method 1 — Copy onto the PVC (how `oci_compute` ships)
 
-Login as `admin@unigps.in` and say:
+```bash
+kubectl cp skills/oci_compute.py \
+  $(kubectl get pod -l app=frontdeskai -o jsonpath='{.items[0].metadata.name}'):/shared/.frontdeskai/skills/oci_compute.py
+kubectl rollout restart deployment/frontdeskai
+```
+
+### Method 2 — Admin chat
+
+Login as an admin (see `ADMIN_EMAILS`) and say:
 ```
 Install a new skill called oci_support with this code: [paste skill file content]
 ```
 
-### Method 2 — Copy to skills directory directly
-
-```bash
-kubectl cp oci_support.py \
-  $(kubectl get pod -l app=frontdeskai -o jsonpath='{.items[0].metadata.name}'):/shared/.frontdeskai/skills/oci_support.py
-```
-
-Skills are auto-loaded on pod startup from `/shared/.frontdeskai/skills/`. A manual reload can be triggered by asking admin: `"list skills"` (which calls `load_all_skills()` first).
+Skills are auto-loaded on pod startup from `/shared/.frontdeskai/skills/`. A manual reload can be triggered by asking an admin to `"list skills"` (which calls `load_all_skills()` first).
 
 ---
 
@@ -342,6 +344,8 @@ set_skill_config("oci_support", "private_key", "<new PEM content>", is_secret=Tr
 ```
 
 The new key is used on the next tool call. The old encrypted value in `system_config` is overwritten.
+No pod restart and no change to `deployment.yaml`, Kubernetes Secrets, or volume mounts is required —
+credentials live entirely in the `system_config` DB.
 
 ---
 
@@ -355,26 +359,3 @@ The new key is used on the next tool call. The old encrypted value in `system_co
 | `OCI API error 403: ...` | IAM policy missing or insufficient | Add required IAM policy for the OCI user |
 | `OCI API error 429: ...` | API rate limit hit | Retry after a few seconds |
 | `This operation requires admin privileges` | Non-admin user called launch/terminate | Login as admin or request via admin |
-
----
-
-## Files Changed
-
-| File | Change |
-|------|--------|
-| `app/requirements.txt` | Added `oci>=2.120.0` |
-| `feature/ociconnectivity.md` | This document |
-| `todo/oci_support_skill.md` | Implementation plan for support skill |
-| `todo/oci_finance_skill.md` | Implementation plan for finance skill |
-| `todo/oci_compute_skill.md` | Implementation plan for compute skill |
-
-No changes to `deployment.yaml`, Kubernetes Secrets, or cluster configuration.
-
----
-
-## Verified
-
-```
-$ kubectl exec deployment/frontdeskai -- python -c "import oci; print(oci.__version__)"
-2.170.0
-```

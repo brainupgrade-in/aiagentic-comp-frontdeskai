@@ -4,7 +4,7 @@
 
 FrontDesk AI is a self-evolving agentic AI employee support desk built with FastAPI, LangGraph, and Ollama Cloud/Groq/OpenRouter LLMs. It routes employee chat requests through a supervisor agent to domain-specific workers (HR, Tech, Finance, Facilities, Analytics, Account, Skill Admin), with RAG-powered policy retrieval, tool-calling, QA checks, and escalation handling.
 
-**Primary LLM:** Ollama Cloud (`api.ollama.com`) — `gemma4:31b` via `ChatOllama` (`langchain-ollama`). Groq (`llama-3.3-70b-versatile`) is the automatic fallback.
+**Primary LLM:** Ollama Cloud (`api.ollama.com`) — `gemma4:cloud` via `ChatOllama` (`langchain-ollama`). Groq (`llama-3.3-70b-versatile`) is the automatic fallback.
 
 **What makes it agentic:** The system teaches itself new capabilities at runtime — admins describe a skill in plain English, and the system researches APIs, writes Python code, validates it, installs it to disk, configures it (API keys encrypted in DB), and executes it via domain workers. Everything persists across restarts with zero rebuild. Skills, config, LLM provider, and SMTP settings are all managed through conversation.
 
@@ -63,10 +63,11 @@ bash scripts/install-observability.sh
 app/
   app.py         (FastAPI)
   ├── auth.py          — per-user password hashing (PBKDF2), ContextVar identity
-  ├── agents.py        — LangGraph graph: supervisor → RAG → workers → QA → finalize
+  ├── agents.py        — LangGraph graph: supervisor → RAG → few-shot → workers → QA → finalize
   │     ├── tools.py   — domain tools (HR, Tech, Finance, Facilities, Analytics, Account)
   │     └── skills.py  — dynamic skill registry, admin tools (search, fetch, install, list)
   ├── rag.py           — ChromaDB vector store, document indexing, retrieval
+  ├── fewshot.py       — few-shot memory: successful Q&A pairs in a second Chroma collection
   └── observability.py — Prometheus metrics, structured logging, tracing
 ```
 
@@ -79,7 +80,8 @@ app/
 | `app/auth.py` | Password hashing (PBKDF2-SHA256, 600k iter), `users` table, `current_user_email` ContextVar |
 | `app/tools.py` | LangChain `@tool` functions for each domain + schema/seed data. HR tools include `get_leave_balance_from_hr_system` (MCP client) as the primary leave tool |
 | `app/skills.py` | Dynamic skill registry: load/install/list/configure skills, web research tools, `skill_config()` helper, runtime tool injection |
-| `app/rag.py` | ChromaDB indexing of `app/data/policies/*.md`, retrieval with category filtering (ONNX embeddings, no torch) |
+| `app/rag.py` | ChromaDB indexing of `app/data/policies/*.md` into the `unigps_policies` collection, retrieval with category filtering (ONNX embeddings, no torch). Persists to `$CHROMA_DIR` (default `/shared/chromadb`) |
+| `app/fewshot.py` | Few-shot memory — successful Q&A pairs in the `fewshot_examples` Chroma collection, retrieved per-category by semantic similarity and injected into domain worker prompts |
 | `app/observability.py` | OpenTelemetry metrics, Prometheus exporter, JSON logging, Langfuse integration |
 | `mcp/mcp-postgre/mcp_leave_server.py` | FastMCP server (streamable-http, port 8001) — `get_leave_balance` + `get_leave_usage` tools backed by PostgreSQL |
 | `mcp/postgre/configmap-init.yaml` | PostgreSQL init SQL — HR schema + 4 seed employees with leave data |
@@ -89,19 +91,22 @@ app/
 
 `hr`, `tech`, `finance`, `facilities`, `analytics`, `account`, `skill_admin`, `general`
 
-- **hr/tech/finance/facilities**: Route through RAG retrieval, then domain worker with tools
-- **analytics**: Bypasses RAG, goes directly to analytics worker with analytics tools
-- **account**: Bypasses RAG, goes directly to account worker with `change_my_password` tool
-- **skill_admin**: Bypasses RAG, admin-only (non-admins routed to general). Tools: `search_web`, `fetch_webpage`, `install_skill`, `list_skills`, `set_skill_config`, `get_skill_config`, `get_llm_config`, `change_llm_model`, `configure_fallback_llm`, `configure_smtp`, `get_smtp_config`, `send_email`. Workers also get dynamically-injected skill tools matching their category. Admins can change the LLM model, provider (ollama/groq/openrouter), API key, fallback LLM, SMTP email settings, and per-skill configuration at runtime via chat.
+- **hr/tech/finance/facilities**: Route through RAG retrieval → few-shot retrieval, then domain worker with tools
+- **analytics**: Bypasses retrieval, goes directly to analytics worker with analytics tools
+- **account**: Bypasses retrieval, goes directly to account worker with `change_my_password` tool
+- **skill_admin**: Bypasses retrieval, admin-only (non-admins routed to general). Tools: `search_web`, `fetch_webpage`, `install_skill`, `list_skills`, `set_skill_config`, `get_skill_config`, `get_llm_config`, `change_llm_model`, `configure_fallback_llm`, `configure_smtp`, `get_smtp_config`, `send_email`. Workers also get dynamically-injected skill tools matching their category. Admins can change the LLM model, provider (ollama/groq/openrouter), API key, fallback LLM, SMTP email settings, and per-skill configuration at runtime via chat.
 - **general**: Static response, no tools
+
+Before category routing, the supervisor's confidence gates the graph: a score below 5 routes to the `clarify` node instead of a worker, which asks a follow-up question and goes straight to `finalize`.
 
 ## Databases & Storage — Zero-Rebuild Persistence
 
-All runtime state is persisted to survive restarts without redeployment (all in `$SQLITE_DIR`, default `/shared/.sqlite`):
+All runtime state is persisted to survive restarts without redeployment. The three SQLite DBs live in `$SQLITE_DIR` (default `/shared/.sqlite`); the vector store and skills sit alongside it under `/shared`:
 
-- `history.db` — chat messages + `users` table (per-user password hashes)
-- `frontdesk_tools.db` — employees, leave, tickets, expenses, rooms, payslips, system_config (LLM + SMTP + skill config settings, secrets Fernet-encrypted)
-- `checkpoints.db` — LangGraph checkpointer
+- `$SQLITE_DIR/history.db` — chat messages + `users` table (per-user password hashes)
+- `$SQLITE_DIR/frontdesk_tools.db` — employees, leave, tickets, expenses, rooms, payslips, system_config (LLM + SMTP + skill config settings, secrets Fernet-encrypted)
+- `$SQLITE_DIR/checkpoints.db` — LangGraph checkpointer
+- `$CHROMA_DIR` (default `/shared/chromadb`) — ChromaDB: `unigps_policies` (RAG) + `fewshot_examples` collections
 - `/shared/.frontdeskai/skills/` — dynamic skill Python files (loaded at startup + on install)
 
 The agentic loop: skill code → filesystem, skill config → DB, LLM/SMTP config → DB. On restart, skills auto-load from disk, config is read from DB — no manual intervention.
@@ -162,10 +167,15 @@ kubectl logs deployment/frontdeskai
 | `AUTH_PASSWORD` | No | `brainupgrade` |
 | `ADMIN_EMAILS` | No | `admin@unigps.in` |
 | `SQLITE_DIR` | No | `/shared/.sqlite` |
+| `CHROMA_DIR` | No | `/shared/chromadb` |
+| `MCP_LEAVE_URL` | No | `http://mcp-leave.postgres.svc.cluster.local:8001/mcp` (set in `deployment.yaml`) |
+| `OTEL_SERVICE_NAME` | No | `frontdeskai` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | No | `http://tempo.monitoring.svc.cluster.local:4317` |
+| `LOG_LEVEL` | No | `INFO` |
 | `SEED_DEMO_DATA` | No | `false` — set to `true` to pre-populate employees, tickets, expenses, leave, rooms, payslips for demos |
 
 **LLM defaults (overridable at runtime via admin chat):**
-- Primary: `ollama` / `gemma4:31b` (Ollama Cloud — `https://api.ollama.com`)
+- Primary: `ollama` / `gemma4:cloud` (Ollama Cloud — `https://api.ollama.com`)
 - Fallback: `groq` / `llama-3.3-70b-versatile` (auto-used on primary failure)
 
 Note: All runtime configuration is managed through chat (stored in `system_config` table, persists across restarts with zero rebuild): LLM model/provider/API key, fallback LLM, SMTP email settings, and per-skill configuration (API keys, base URLs, etc.). SMTP password and secret skill config values are encrypted with Fernet (derived from `SECRET_KEY`).
@@ -218,7 +228,9 @@ get_leave_balance_from_hr_system  ──────→  FastMCP · streamable-h
 | `scripts/deploy-mcp.sh` | Deploy MCP Leave Service — PostgreSQL + MCP server into `postgres` namespace + smoke test |
 | `scripts/update-secret.sh` | Update K8s secret from `.env` without rebuilding image (preserves SECRET_KEY, includes OLLAMA_API_KEY + GROQ_API_KEY + Langfuse) |
 | `scripts/install-observability.sh` | Install Prometheus, Grafana, Loki, Promtail, Tempo via Helm into `monitoring` namespace |
+| `scripts/update-observability.sh` | Update one component without a full reinstall — `grafana`, `dashboard`, `prometheus`, `loki`, `promtail`, `tempo`, or no arg for everything |
 | `scripts/generate-test-traffic.sh` | Generate load to populate observability dashboards |
+| `skills/oci_compute.py` | OCI compute self-service skill (git-tracked source; `kubectl cp` it to `/shared/.frontdeskai/skills/` to install) |
 | `scripts/manifests/deployment.yaml` | App deployment (image: `frontdeskai:latest`, imagePullPolicy: Never for kind) + `MCP_LEAVE_URL` env |
 | `scripts/manifests/service.yaml` | NodePort service — http(80→30800), metrics(9090→30900) |
 | `scripts/manifests/secret.yaml` | Secret template — `GROQ_API_KEY`, `SECRET_KEY`, `AUTH_PASSWORD`, `OLLAMA_API_KEY`, optional Langfuse keys |

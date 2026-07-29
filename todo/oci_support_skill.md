@@ -10,7 +10,10 @@
 
 FrontDesk AI's `tech` worker currently handles IT tickets via `create_ticket`, `get_ticket_status`, and `list_my_tickets` (internal SQLite-backed). This skill extends it to Oracle Cloud Infrastructure's official Support API (CIMS), so employees can raise and track cloud infrastructure incidents through the same chat interface.
 
-OCI MCP Server used: [`oracle/mcp` → `src/oci-support-mcp-server`](https://github.com/oracle/mcp/tree/main/src/oci-support-mcp-server)
+Calls the CIMS API through the OCI Python SDK directly, matching the pattern already shipped in
+`skills/oci_compute.py`. Oracle's [`oci-support-mcp-server`](https://github.com/oracle/mcp/tree/main/src/oci-support-mcp-server)
+is a reference for the API surface, but running it would add a network hop with no functional
+benefit — both paths sit on the same SDK.
 
 ---
 
@@ -86,19 +89,10 @@ def _get_oci_config() -> dict:
 
 ## Implementation Steps
 
-### Step 1 — Install OCI Python SDK in the container image
+### Step 1 — OCI Python SDK (already done)
 
-Edit `requirements.txt`:
-```
-oci>=2.120.0
-```
-
-Rebuild and redeploy (one command):
-```bash
-bash scripts/deploy.sh
-```
-
-This is the **only infra change** required. No K8s Secrets, no volume mounts.
+`oci>=2.120.0` is already in `app/requirements.txt` and baked into the image by `skills/oci_compute.py`.
+No infra change is required for this skill — no K8s Secrets, no volume mounts.
 
 ### Step 2 — Write the skill file
 
@@ -200,7 +194,9 @@ except oci.exceptions.InvalidConfig as e:
 
 | File | Change |
 |------|--------|
-| `requirements.txt` | Add `oci>=2.120.0` |
 | `/shared/.frontdeskai/skills/oci_support.py` | New skill file (installed at runtime via admin chat) |
 
-No changes to `deployment.yaml` — credentials live entirely in the `system_config` DB.
+`oci>=2.120.0` is already in `app/requirements.txt` and baked into the image — no dependency change
+needed. No changes to `deployment.yaml` either; credentials live entirely in the `system_config` DB.
+See [`feature/ociconnectivity.md`](../feature/ociconnectivity.md) for the shared OCI auth design and
+the `_get_oci_config()` helper already proven out by `skills/oci_compute.py`.

@@ -67,16 +67,21 @@ How many conversations happened last month?
 
 ```
 What model are we using?
-Change model to llama-3.1-8b-instant
+Switch to qwen3-next:80b on ollama
+Change model to llama-3.1-8b-instant on groq
 Switch to OpenRouter with google/gemini-2.0-flash-001 and API key sk-or-...
-Update groq api key to gsk_...
+Set fallback to groq llama-3.1-8b-instant
+Update ollama api key to ...
 ```
 
 Changes take effect immediately and persist across restarts — no rebuild needed.
 
 **Supported providers:**
-- **Groq** (default): `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `mixtral-8x7b-32768`, etc.
-- **OpenRouter**: 200+ models via `provider/model` format (e.g. `google/gemini-2.0-flash-001`, `anthropic/claude-3.5-sonnet`)
+- **Ollama Cloud** (primary default, `gemma4:cloud`): `qwen3-next:80b`, `deepseek-v3.1:671b`, etc.
+- **Groq** (fallback default, `llama-3.3-70b-versatile`): `llama-3.1-8b-instant`, `mixtral-8x7b-32768`, etc.
+- **OpenRouter**: models via `provider/model` format (e.g. `google/gemini-2.0-flash-001`, `anthropic/claude-3.5-sonnet`)
+
+If the primary provider fails a call, the configured fallback LLM is used automatically.
 
 ### SMTP Email Configuration (via Chat)
 
@@ -118,16 +123,37 @@ Employee: "What's the weather in Bangalore?"
   → Facilities worker uses the weather tool automatically
 ```
 
+#### Bundled skill — OCI compute
+
+The repo ships `skills/oci_compute.py`. Once an admin installs it and sets the OCI config keys,
+employees can manage cloud VMs from chat:
+
+```
+list all running OCI instances
+show details for instance frontdeskai-dev-01
+restart the instance named frontdeskai-dev-01
+```
+
+Launching and terminating instances is restricted to admins. See `skills/oci_compute.md` for
+installation and the required config keys.
+
 ---
 
 ## Updating API Keys Without Rebuilding
 
 **Option 1 — Via admin chat (zero downtime):**
 ```
+Update ollama api key to ...
 Update groq api key to gsk_...
 ```
 
-**Option 2 — Via Kubernetes secret patch (requires pod restart, no rebuild):**
+**Option 2 — From `.env` via script (requires pod restart, no rebuild):**
+```bash
+# Edit .env with the new keys, then:
+bash scripts/update-secret.sh
+```
+
+**Option 3 — Patch the Kubernetes secret directly:**
 ```bash
 kubectl patch secret frontdeskai-secret \
   --type=merge -p '{"stringData":{"GROQ_API_KEY":"<new-key>"}}'

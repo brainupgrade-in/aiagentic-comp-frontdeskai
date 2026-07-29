@@ -26,11 +26,15 @@ Each chat request creates a parent span with child spans for each LLM agent call
 ```
 chat.send (parent)                    ← app/app.py
 ├── llm.supervisor                    ← app/agents.py (classification)
-├── llm.<worker>                      ← app/agents.py (hr/tech/finance/facilities/general)
-│   (hr_worker, tech_worker, etc.)
+├── llm.<worker>                      ← app/agents.py
+│   (hr_worker, tech_worker, finance_worker, facilities_worker,
+│    analytics_worker, account_worker, skill_admin_worker, general_worker)
 ├── llm.manager                       ← app/agents.py (if escalated)
 └── (all logs correlated via trace_id/span_id)
 ```
+
+Retries add a second `llm.<worker>` span for the same agent — the QA gate can send a worker
+back once (`MAX_QA_RETRIES = 1`) before falling through to the static fallback template.
 
 ### Span Attributes
 
@@ -134,7 +138,8 @@ All observability configuration is externalized via environment variables set in
 
 ### Kubernetes Pod Annotations
 
-For Prometheus to scrape the app, the deployment must have these annotations:
+For Prometheus to scrape the app, the pod template must carry these annotations. They are already
+set in `scripts/manifests/deployment.yaml` — nothing to do unless you are deploying by hand:
 
 ```yaml
 spec:
@@ -144,17 +149,6 @@ spec:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8000"
         prometheus.io/path: "/metrics"
-```
-
-Add via kubectl:
-```bash
-kubectl patch deployment frontdeskai -n <NAMESPACE> --type=merge -p '{
-  "spec": {"template": {"metadata": {"annotations": {
-    "prometheus.io/scrape": "true",
-    "prometheus.io/port": "8000",
-    "prometheus.io/path": "/metrics"
-  }}}}
-}'
 ```
 
 ## Code Structure
@@ -244,10 +238,12 @@ view = View(
 
 ### Prometheus Scrape Annotations
 
-Annotations must be on the **pod template**, not the Deployment metadata:
+Annotations must be on the **pod template** (`spec.template.metadata.annotations`), not the
+Deployment metadata. Without them, Prometheus will not discover or scrape the `/metrics` endpoint,
+even though the app exposes it correctly. If you ever need to add them to a live deployment:
 
 ```bash
-kubectl patch deployment frontdeskai -n <NAMESPACE> --type=merge -p '{
+kubectl patch deployment frontdeskai --type=merge -p '{
   "spec": {"template": {"metadata": {"annotations": {
     "prometheus.io/scrape": "true",
     "prometheus.io/port": "8000",
@@ -255,8 +251,6 @@ kubectl patch deployment frontdeskai -n <NAMESPACE> --type=merge -p '{
   }}}}
 }'
 ```
-
-Without these annotations, Prometheus will not discover or scrape the `/metrics` endpoint, even though the app exposes it correctly.
 
 ### OTLP Exporter — Insecure Mode
 
@@ -311,8 +305,14 @@ curl -s "http://tempo.monitoring.svc.cluster.local:3200/api/search?tags=service.
 ### Check Metrics in Prometheus
 
 ```bash
-curl -s "http://prometheus-server.monitoring.svc.cluster.local:80/api/v1/query" \
+curl -s "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090/api/v1/query" \
   --data-urlencode 'query={__name__=~"frontdeskai.*"}'
+```
+
+From outside the cluster, port-forward first (Prometheus has no NodePort):
+
+```bash
+kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9091:9090
 ```
 
 ### Check Logs in Loki
@@ -325,11 +325,12 @@ curl -s "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/query_range" 
 ### Send a Test Request
 
 ```bash
-kubectl exec -n <NAMESPACE> deployment/frontdeskai -- python3 -c "
-import requests
-s = requests.Session()
-s.post('http://localhost:8000/login', data={'email': 'test@test.com', 'password': 'brainupgrade'})
-r = s.post('http://localhost:8000/chat/send', data={'message': 'What is the leave policy?'})
-print(r.status_code, r.text[:200])
-"
+# One request against the NodePort-exposed app
+bash scripts/generate-test-traffic.sh 1 0
+
+# Or point it at a different host
+FRONTDESKAI_URL=http://localhost:8000 bash scripts/generate-test-traffic.sh 5 10
 ```
+
+The script logs in as `loadtest@test.com` and cycles through questions across all categories, so a
+handful of requests is enough to populate every dashboard panel.

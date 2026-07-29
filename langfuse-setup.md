@@ -36,11 +36,12 @@ User Request → app/app.py
         └── ...
 ```
 
-Each `llm.invoke()` call through `ChatGroq` triggers the callback, which sends:
+Each `llm.invoke()` call — through `ChatOllama`, `ChatGroq`, or `ChatOpenAI` (OpenRouter), whichever
+provider is configured — triggers the callback, which sends:
 - Full prompt text
 - Full completion text
 - Token usage (input, output, total)
-- Model name (`llama-3.3-70b-versatile`)
+- Model name (e.g. `gemma4:cloud` on the default Ollama Cloud provider)
 - Latency
 - User and session IDs
 
@@ -84,15 +85,29 @@ def get_langfuse_handler(user_id="", session_id=""):
 ```python
 from observability import get_langfuse_handler
 
-# Inside send_message():
-config = {"configurable": {"thread_id": user}}
-
+# Inside send_message() → run_graph():
 lf_handler = get_langfuse_handler(user_id=user, session_id=user)
+config = {"configurable": {"thread_id": user}}
 if lf_handler:
     config["callbacks"] = [lf_handler]
 
 result = compiled.invoke(initial_state, config)
 ```
+
+**`app/agents.py`** — Explicit propagation into each node:
+
+LangGraph hands the `RunnableConfig` to every node function, but the LLM chains built inside a node
+are constructed fresh and do not inherit it. Each node therefore pulls the callbacks off its config
+and re-attaches them, otherwise the generations never reach Langfuse:
+
+```python
+def supervisor(state: SupportRequest, config: RunnableConfig = None) -> dict:
+    callbacks = config.get("callbacks", []) if config else []
+    result = get_llm_chain(Classification).with_config(callbacks=callbacks).invoke(prompt)
+```
+
+The same pattern is applied in `make_domain_worker()` (for both the tool-bound and structured-output
+calls) and in `manager_agent()`.
 
 ## Configuration
 
@@ -122,6 +137,7 @@ cp .env.example .env
 Add your keys to `.env`:
 
 ```env
+OLLAMA_API_KEY=your_ollama_cloud_key_here
 GROQ_API_KEY=gsk_your_groq_key_here
 LANGFUSE_SECRET_KEY=sk-lf-your-secret-key
 LANGFUSE_PUBLIC_KEY=pk-lf-your-public-key
@@ -164,11 +180,11 @@ The deployment manifest mounts Langfuse env vars from the secret with `optional:
 
 | Field | Source | Example |
 |-------|--------|---------|
-| Model | `ChatGroq` config | `llama-3.3-70b-versatile` |
+| Model | Active provider config | `gemma4:cloud` |
 | Prompt | Full prompt text | `"You are UniGPS HR..."` |
 | Completion | Full response text | `"You have 24 casual leaves..."` |
-| Input Tokens | Groq API response | `156` |
-| Output Tokens | Groq API response | `89` |
+| Input Tokens | Provider API response | `156` |
+| Output Tokens | Provider API response | `89` |
 | Latency | Call duration | `472ms` |
 | Agent Name | LangGraph node name | `hr_worker` |
 
@@ -227,8 +243,7 @@ If you see `"Langfuse disabled"` instead, check that all three env vars are set 
 ### 2. Send a Test Request
 
 ```bash
-FRONTDESKAI_URL=https://<NAMESPACE>-app.brainupgrade.in \
-  bash scripts/generate-test-traffic.sh 1 0
+bash scripts/generate-test-traffic.sh 1 0
 ```
 
 ### 3. Check Langfuse Cloud
@@ -238,7 +253,7 @@ Go to [https://cloud.langfuse.com](https://cloud.langfuse.com) → your project 
 You should see a new trace with:
 - User: the email used for login
 - Generations: 2-3 (supervisor + worker + possibly manager)
-- Model: `llama-3.3-70b-versatile`
+- Model: whatever the active provider is set to (`gemma4:cloud` by default)
 
 ### 4. Verify via Pod Logs
 
@@ -274,7 +289,7 @@ Both systems capture observability data, but serve different purposes:
 
 ```
 # app/requirements.txt
-langchain>=0.3.0
+langchain>=0.3.0,<0.4.0
 langfuse==2.51.3
 ```
 
@@ -282,26 +297,30 @@ langfuse==2.51.3
 
 ## Disabling Langfuse
 
-To disable Langfuse without code changes, remove or clear the env vars:
+To disable Langfuse without code changes, blank the env vars — the app treats empty values as
+"not configured" and starts normally:
 
 ```bash
-# Clear from K8s secret
-kubectl create secret generic frontdeskai-secret \
-  --from-literal=GROQ_API_KEY="..." \
-  --from-literal=SECRET_KEY="..." \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-# Restart the app
+kubectl patch secret frontdeskai-secret --type=merge \
+  -p '{"stringData":{"LANGFUSE_SECRET_KEY":"","LANGFUSE_PUBLIC_KEY":"","LANGFUSE_HOST":""}}'
 kubectl rollout restart deployment/frontdeskai
 ```
 
-Or simply remove the `LANGFUSE_*` lines from `.env` and redeploy.
+Use `patch --type=merge`, not `kubectl create secret ... | kubectl apply` — the latter replaces the
+whole secret and would drop `OLLAMA_API_KEY`, `SECRET_KEY`, and `AUTH_PASSWORD` along with it.
+
+Or remove the `LANGFUSE_*` lines from `.env` and run `bash scripts/update-secret.sh`.
 
 ## Use Case: Detecting an Infinite LLM Loop Before It Burns Thousands of Dollars
 
+> **Note:** this is a worked teaching scenario, not a description of the current code. FrontDesk AI
+> already ships the bounded version of this retry — `route_qa()` sends a failing worker back at most
+> `MAX_QA_RETRIES = 1` times before routing to `fallback`. The buggy variant below is what an
+> *unbounded* version of that same feature would look like, and how Langfuse catches it.
+
 ### The Scenario
 
-A developer modifies the FrontDesk AI agent graph to add a "retry with better prompt" feature. The intent is simple: if `qa_check` fails, instead of falling back to a template response, re-route back to the worker agent with an improved prompt.
+A developer modifies the FrontDesk AI agent graph to add a "retry with better prompt" feature. The intent is simple: if `qa_check` fails, instead of falling back to a template response, re-route back to the worker agent with an improved prompt — but without a retry counter.
 
 The code change looks harmless:
 
@@ -404,30 +423,26 @@ Langfuse **Metrics** tab shows:
 
 #### Step 4: Fix and Verify
 
-The fix is straightforward once you see the loop pattern:
+The fix is straightforward once you see the loop pattern — bound the retry with a counter carried in
+graph state. This is what FrontDesk AI actually ships in `app/agents.py`:
 
 ```python
-# FIXED — add a retry counter to prevent infinite loops
-MAX_RETRIES = 2
+MAX_QA_RETRIES = 1  # max times QA can send the worker back for self-correction
 
-def qa_check(state: SupportRequest) -> dict:
-    output = state["worker_output"]
-    retry_count = state.get("qa_retry_count", 0)
-
-    if len(output) < 20 and retry_count < MAX_RETRIES:
-        return {"error": "too short", "qa_retry_count": retry_count + 1}
-    elif len(output) < 20:
-        return {"error": "too short after retries"}  # goes to fallback
-    return {"error": ""}
-```
-
-Or better — keep the original safe design that routes QA failures to `fallback` (a static template), never back to the worker:
-
-```python
-# SAFE — the original FrontDesk AI design
 def route_qa(state: SupportRequest) -> str:
-    return "fallback" if state["error"] else "finalize"
+    """Route QA results: retry worker once on failure, then fallback."""
+    if not state.get("error"):
+        return "finalize"
+    retry_count = state.get("qa_retry_count") or 0
+    if retry_count < MAX_QA_RETRIES:
+        return "retry_worker"
+    return "fallback"
 ```
+
+`retry_worker` increments `qa_retry_count`, re-invokes the same domain worker with the QA feedback
+injected into its prompt, and routes back through `escalation_check → qa_check`. Because the counter
+lives in state and only ever increases, the cycle can execute at most once — one extra generation per
+request, not 146.
 
 After deploying the fix, send another test request and check Langfuse:
 
@@ -451,10 +466,14 @@ Fixed trace:     3 generations, 847 tokens, 1.4s  ← back to normal
 
 After catching this bug, implement these safeguards:
 
-1. **LangGraph recursion limit** — set `compiled.invoke(state, config, recursion_limit=25)` to hard-cap graph steps
-2. **Langfuse alerts** — set up a webhook alert when generation count per trace exceeds 10
-3. **Token budget per request** — check cumulative tokens in `trace_llm_call()` and abort if threshold exceeded
-4. **No retry loops in agent graphs** — QA failures should go to `fallback`, never back to workers
+1. **Bound every cycle with a state counter** — any edge that can route backwards needs a counter in
+   graph state and a hard ceiling, the way `qa_retry_count` / `MAX_QA_RETRIES` do. This is the
+   safeguard the shipped code relies on.
+2. **LangGraph recursion limit** — pass `{"recursion_limit": 25}` in the invoke config as a
+   belt-and-braces cap on total graph steps. FrontDesk AI does *not* set this today.
+3. **Langfuse alerts** — webhook alert when generation count per trace exceeds 10
+4. **Token budget per request** — check cumulative tokens in `trace_llm_call()` and abort if a
+   threshold is exceeded
 5. **Grafana alert on token rate** — `rate(frontdeskai_llm_tokens_total[1m]) > 1000` triggers PagerDuty
 
 ### Summary

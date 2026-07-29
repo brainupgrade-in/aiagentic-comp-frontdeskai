@@ -5,19 +5,28 @@ A truly agentic AI employee support desk that teaches itself new capabilities th
 ## Architecture
 
 ```
-User Request → Supervisor (LLM classifier)
-                   ↓
-        ┌──────────┼───────────────────────────────┐
-        HR    Tech   Finance  Facilities  Analytics  Account  Skill Admin  General  Clarify
-        └──────────┼───────────────────────────────┘
-                   ↓
-           Escalation Check
-           ├→ Manager (policy exceptions)
-           ├→ QA Check (PII redaction) → Finalize
-           └→ Fallback (template)
+User Request → Supervisor (LLM classifier + confidence)
+                   │
+   ┌───────────────┼──────────────────────────────────────────┐
+   │               │                                          │
+confidence<5   hr · tech · finance · facilities    analytics · account · skill_admin · general
+   │               │                                          │
+Clarify      RAG Retrieval → Few-shot Retrieval               │
+   │               └──────────────► Domain Worker ◄───────────┘
+   │                                     ↓
+   │                             Escalation Check
+   │                             ├→ Manager (policy exceptions) → QA Check
+   │                             ├→ QA Check (PII redaction)
+   │                             └→ Fallback (template)
+   │                                     ↓
+   │                       QA pass → Finalize
+   │                       QA fail → Retry Worker (once) → Escalation Check
+   └────────────────────────────────────► Finalize
 ```
 
-**Agents:** Supervisor, HR Worker, Tech Worker, Finance Worker, Facilities Worker, Analytics Worker, Account Worker, Skill Admin Worker, General Worker, Clarify Agent, Manager, QA Gate, Fallback
+**Agents:** Supervisor, Clarify Agent, RAG Retrieval, Few-shot Retrieval, HR Worker, Tech Worker, Finance Worker, Facilities Worker, Analytics Worker, Account Worker, Skill Admin Worker, General Worker, Escalation Check, Manager, QA Gate, Retry Worker, Fallback, Finalize (18 graph nodes)
+
+Only `hr`, `tech`, `finance`, and `facilities` pass through RAG and few-shot retrieval. `analytics`, `account`, `skill_admin`, and `general` route straight to their worker. `skill_admin` is admin-gated — non-admins are redirected to `general`.
 
 **What makes it agentic:**
 - **Self-teaching** — admins describe a capability in plain English; the system researches APIs, writes Python code, validates it, installs it, and makes it available to employees — all in one conversation
@@ -26,10 +35,11 @@ User Request → Supervisor (LLM classifier)
 - **End-to-end agentic loop** — Research (web search) → Code generation → AST validation → Install to filesystem → Configure (API keys in DB, encrypted) → Execute via domain workers
 
 **Core features:**
-- Multi-agent routing with structured LLM classification
+- Multi-agent routing with structured LLM classification + low-confidence clarification
 - RAG-powered policy document retrieval (ChromaDB with ONNX embeddings — no torch/CUDA required)
+- Few-shot retrieval — similar past Q&A pairs injected into domain worker prompts
 - ReAct tool-calling loop (up to 3 iterations per worker)
-- QA gate with PII detection/redaction and self-correction retry
+- QA gate with PII detection/redaction and one self-correction retry
 - Per-user password storage (PBKDF2-HMAC-SHA256, 600k iterations)
 - Chat-based password change via the Account agent
 - Dynamic skill installation with per-skill configuration (API keys, secrets encrypted at rest)
@@ -46,58 +56,38 @@ User Request → Supervisor (LLM classifier)
 
 **Login:** Any email + shared password (default `brainupgrade`). On first login, the password is hashed and stored per-user. Subsequent logins use the stored hash.
 
+## Documentation
+
+This README is the reference: what the system is, how the agent graph is wired, and every knob it exposes.
+The two task-oriented guides own their procedures — they are not duplicated here.
+
+| Doc | Use it when you want to… |
+|---|---|
+| **[participant-instructions.md](participant-instructions.md)** | Deploy it — Codespace, kind, or local; observability stack; MCP stack; troubleshooting |
+| **[user-manual.md](user-manual.md)** | Use it — what to type in chat as an employee or admin |
+| **[observability.md](observability.md)** | Read the metrics, spans, logs, and Grafana dashboard in detail |
+| **[langfuse-setup.md](langfuse-setup.md)** | Wire up LLM-level tracing with Langfuse |
+| **[feature/ociconnectivity.md](feature/ociconnectivity.md)** | Understand the OCI integration design |
+
 ## Quick Start
-
-### Option A — GitHub Codespace (Recommended)
-
-Open the repo on GitHub → **Code → Codespaces → Create codespace on main**
-
-The devcontainer auto-installs Python, kubectl, helm, kind, and spins up a local Kubernetes cluster. When ready:
-
-```bash
-cp .env.example .env          # set OLLAMA_API_KEY (primary) + GROQ_API_KEY (fallback)
-bash scripts/deploy.sh        # build + deploy to kind + rollout restart
-# Open http://localhost:8000  (NodePort — no port-forward needed)
-```
-
-### Option B — Local Machine
 
 ```bash
 git clone https://github.com/brainupgrade-in/aiagentic-comp-frontdeskai.git
 cd aiagentic-comp-frontdeskai
-
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r app/requirements.txt
-
 cp .env.example .env          # set OLLAMA_API_KEY (primary) + GROQ_API_KEY (fallback)
-python app/app.py             # Open http://localhost:8000
+
+# Kubernetes (Codespace or kind) — the supported path
+bash scripts/deploy.sh        # build + load into kind + deploy
+
+# …or run it directly against your Python env
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r app/requirements.txt && python app/app.py
 ```
 
-See [participant-instructions.md](participant-instructions.md) for the full deployment guide including kind cluster setup and observability stack.
+Open **http://localhost:8000** and log in with any email + `brainupgrade`.
 
-See [user-manual.md](user-manual.md) for end-user and admin usage instructions.
-
-### Observability Stack (Prometheus · Grafana · Loki · Promtail · Tempo)
-
-```bash
-bash scripts/install-observability.sh
-# Open http://localhost:3000  (agenticai / agentgrow.io) — NodePort, no port-forward needed
-```
-
-Metrics, logs, and traces are fully correlated in Grafana — click a trace ID in a log line to jump to the trace, or click a metric exemplar to see the originating trace.
-
-### Redeploy After Code Changes
-
-```bash
-bash scripts/deploy.sh
-```
-
-### Verify
-
-```bash
-kubectl get pods -l app=frontdeskai
-kubectl logs deployment/frontdeskai
-```
+Full deployment guide, including cluster creation, the observability stack, and troubleshooting:
+**[participant-instructions.md](participant-instructions.md)**.
 
 ## MCP Demo — Employee Leave via Remote PostgreSQL
 
@@ -114,12 +104,7 @@ FrontDesk AI                          MCP Leave Server (port 8001)
                                          leave_balances, leave_requests
 ```
 
-**Deploy MCP stack (once, before or after `deploy.sh`):**
-```bash
-bash scripts/deploy-mcp.sh
-# Deploys PostgreSQL + MCP Leave Server into postgres namespace
-# Smoke-tests a live cross-namespace MCP call automatically
-```
+Deploy it with `bash scripts/deploy-mcp.sh` (see [participant-instructions.md](participant-instructions.md)).
 
 **Demo:** ask FrontDesk AI *"How many leaves do I have left?"* — the HR worker calls `get_leave_balance_from_hr_system`, which POSTs a JSON-RPC request to `http://mcp-leave.postgres.svc.cluster.local:8001/mcp`, which queries PostgreSQL and returns the live balance.
 
@@ -139,9 +124,12 @@ See [`mcp/mcp-postgre/design.html`](mcp/mcp-postgre/design.html) for the full ar
 
 | File | Description |
 |------|-------------|
+| `scripts/create-kind-cluster.sh` | One-time localhost/cloud-labs setup — creates kind cluster `frontdeskai` with NodePort mappings + `/shared/.sqlite` |
 | `scripts/deploy.sh` | One-command deploy — build + load/push + apply manifests, auto-detects kind vs production; preserves existing `SECRET_KEY` to avoid breaking encrypted DB values |
 | `scripts/deploy-mcp.sh` | Deploy MCP Leave Service (PostgreSQL + MCP server) into `postgres` namespace with smoke test |
+| `scripts/update-secret.sh` | Update the K8s secret from `.env` without rebuilding the image (preserves `SECRET_KEY`) |
 | `scripts/install-observability.sh` | Install Prometheus, Grafana, Loki, Promtail, Tempo via Helm |
+| `scripts/update-observability.sh` | Update individual observability components (`grafana`, `dashboard`, `prometheus`, `loki`, `promtail`, `tempo`) without a full reinstall |
 | `scripts/generate-test-traffic.sh` | Generate load to populate observability dashboards |
 | `scripts/manifests/deployment.yaml` | App deployment + 1Gi PVC + Prometheus scrape annotations + `MCP_LEAVE_URL` env |
 | `scripts/manifests/service.yaml` | NodePort service — http (80→30800), metrics (9090→30900) |
@@ -171,6 +159,16 @@ See [`mcp/mcp-postgre/design.html`](mcp/mcp-postgre/design.html) for the full ar
 │   │   └── style.css       # UI styles
 │   └── data/
 │       └── policies/       # Policy markdown documents (RAG source)
+│           ├── hr-handbook.md
+│           ├── it-support.md
+│           ├── finance-policies.md
+│           ├── facilities-guide.md
+│           └── oci-access.md
+├── skills/                 # Skill source kept in git (copied to the PVC at /shared/.frontdeskai/skills/)
+│   ├── oci_compute.py      # OCI compute self-service skill
+│   └── oci_compute.md      # Skill reference — tools, config keys, IAM policies
+├── feature/                # Feature design docs (e.g. ociconnectivity.md)
+├── todo/                   # Implementation plans not yet built
 ├── mcp/
 │   ├── postgre/            # PostgreSQL K8s manifests (namespace, secret, configmap, pvc, deployment, service)
 │   └── mcp-postgre/        # MCP Leave Server (FastMCP + psycopg2, streamable-http transport)
@@ -200,7 +198,9 @@ See [`mcp/mcp-postgre/design.html`](mcp/mcp-postgre/design.html) for the full ar
 | `AUTH_PASSWORD` | Shared password for first-time login | `brainupgrade` |
 | `ADMIN_EMAILS` | Comma-separated admin emails | `admin@unigps.in` |
 | `SQLITE_DIR` | SQLite database directory | `/shared/.sqlite` |
+| `CHROMA_DIR` | ChromaDB persistence directory | `/shared/chromadb` |
 | `SEED_DEMO_DATA` | Pre-populate demo employees, tickets, expenses, leave, rooms, payslips | `false` |
+| `MCP_LEAVE_URL` | MCP Leave Server endpoint (see MCP Demo above) | `http://mcp-leave.postgres.svc.cluster.local:8001/mcp` |
 | `LANGFUSE_PUBLIC_KEY` | Langfuse public key (optional) | — |
 | `LANGFUSE_SECRET_KEY` | Langfuse secret key (optional) | — |
 | `LANGFUSE_HOST` | Langfuse host URL (optional) | — |
@@ -284,42 +284,51 @@ def get_weather(city: str) -> str:
     return f"{city}: {data['current']['temp_c']}°C, {data['current']['condition']['text']}"
 ```
 
-### Admin Commands via Chat
+### Skill Admin Tools
 
-| Command | What happens |
-|---------|-------------|
-| *"Install a skill to check weather"* | Researches APIs, generates code, validates, installs, loads |
-| *"List installed skills"* | Shows all skills with tools, categories, and config keys |
-| *"Set the API key for weather skill"* | Stores encrypted in DB via `set_skill_config` |
-| *"Show config for weather skill"* | Shows configured vs MISSING keys via `get_skill_config` |
+The `skill_admin` worker exposes these tools to admins: `search_web`, `fetch_webpage`, `install_skill`,
+`list_skills`, `set_skill_config`, `get_skill_config`, `get_llm_config`, `change_llm_model`,
+`configure_fallback_llm`, `configure_smtp`, `get_smtp_config`, `send_email`.
+
+For the phrasing that triggers each one, see [user-manual.md](user-manual.md).
+
+### Shipped Skill — `oci_compute`
+
+The repo ships one ready-made skill in `skills/oci_compute.py`: OCI compute self-service for the `tech`
+and `skill_admin` workers (list, inspect, softreset/stop/start, launch, terminate instances). Launch and
+terminate are admin-gated. All OCI credentials — including the API private key — are set through admin
+chat and stored encrypted in `system_config`; no Kubernetes Secret or `~/.oci/config` mount is required.
+
+Install it by copying it onto the PVC (it auto-loads on pod start):
+
+```bash
+kubectl cp skills/oci_compute.py \
+  $(kubectl get pod -l app=frontdeskai -o jsonpath='{.items[0].metadata.name}'):/shared/.frontdeskai/skills/oci_compute.py
+kubectl rollout restart deployment/frontdeskai
+```
+
+See [`skills/oci_compute.md`](skills/oci_compute.md) for tools, config keys, and IAM policies, and
+[`feature/ociconnectivity.md`](feature/ociconnectivity.md) for the overall OCI integration design.
 
 ## LLM Configuration
 
 Admins can change the LLM model, provider, API key, and fallback at runtime via chat — no restart needed.
 
 **Supported providers:**
-- **Ollama Cloud** (primary default): `gemma4:31b`, `qwen3-next:80b`, `deepseek-v3.1:671b`, etc. — hosted at `api.ollama.com`
+- **Ollama Cloud** (primary default): `gemma4:cloud`, `qwen3-next:80b`, `deepseek-v3.1:671b`, etc. — hosted at `api.ollama.com`
 - **Groq** (fallback default): `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `mixtral-8x7b-32768`, etc.
 - **OpenRouter**: Access 100+ models via `provider/model` format (e.g. `google/gemini-2.0-flash-001`, `anthropic/claude-3.5-sonnet`)
 
-**Admin commands via chat:**
-- *"What model are we using?"* — shows current provider, model, temperature, fallback, and API key status
-- *"Switch to qwen3-next:80b on ollama"* — switches Ollama Cloud model
-- *"Change model to llama-3.1-8b-instant on groq"* — switches provider + model
-- *"Switch to OpenRouter with google/gemini-2.0-flash-001 and API key sk-or-..."* — switches to OpenRouter
-- *"Set fallback to groq llama-3.1-8b-instant"* — configures fallback LLM
-- *"Disable fallback"* — removes fallback
-
-Settings persist in the `system_config` table and survive restarts.
+Model, provider, API key, and fallback are changed at runtime through admin chat — see
+[user-manual.md](user-manual.md) for the exact phrasing. Settings persist in the `system_config`
+table and survive restarts. If the primary provider errors, the configured fallback LLM is used
+automatically.
 
 ## Email / SMTP Configuration
 
-Admins can configure SMTP email settings and send emails via chat — no restart needed. SMTP passwords are encrypted with Fernet (AES-128-CBC + HMAC-SHA256) derived from `SECRET_KEY`.
-
-**Admin commands via chat:**
-- *"Show email settings"* — shows current SMTP configuration (password masked)
-- *"Configure SMTP with host=email-smtp.us-east-1.amazonaws.com port=587 username=AKIA... password=... from=noreply@domain.com"* — sets up SMTP
-- *"Send an email to rajesh@unigps.in about his leave approval"* — sends an email using configured SMTP
+Admins configure SMTP and send email through chat — no restart needed; see
+[user-manual.md](user-manual.md). SMTP passwords are encrypted with Fernet (AES-128-CBC +
+HMAC-SHA256) derived from `SECRET_KEY`.
 
 **Security notes:**
 - SMTP password is encrypted at rest using Fernet symmetric encryption
@@ -334,7 +343,7 @@ Admins can configure SMTP email settings and send emails via chat — no restart
 | `history.db` | `$SQLITE_DIR/history.db` | Chat message history + `users` table (per-user password hashes) |
 | `frontdesk_tools.db` | `$SQLITE_DIR/frontdesk_tools.db` | Business data: employees, leave, tickets, expenses, rooms, payslips + system_config (LLM + SMTP + skill config) |
 | `checkpoints.db` | `$SQLITE_DIR/checkpoints.db` | LangGraph checkpointer state |
-| `chroma/` | `$SQLITE_DIR/chroma/` | ChromaDB vector store for RAG |
+| ChromaDB | `$CHROMA_DIR` (default `/shared/chromadb`) | Vector store for RAG policy chunks + few-shot examples |
 | `skills/` | `/shared/.frontdeskai/skills/` | Dynamic skill Python files (loaded at startup) |
 
 ## Observability
@@ -357,29 +366,15 @@ Exposed at `/metrics` on port 8000. Custom metrics:
 
 ### Logs (Loki)
 
-Structured JSON to stdout — Loki scrapes pod logs automatically. Each line includes `trace_id`, `span_id`, `agent`, `category`.
-
-```bash
-# Grafana Loki query
-{app="frontdeskai"} | json | level="ERROR"
-```
+Structured JSON to stdout — Promtail ships pod logs to Loki. Each line includes `trace_id`, `span_id`, `agent`, `category`.
 
 ### Tracing
 
-In-process spans with trace_id/span_id correlated in log lines. Parent span `chat.send` wraps the full request; child spans `llm.<agent>` wrap each LLM call.
+Spans are exported over OTLP gRPC to Tempo (`OTEL_EXPORTER_OTLP_ENDPOINT`) and correlated with log lines via `trace_id`/`span_id`. Parent span `chat.send` wraps the full request; child spans `llm.<agent>` wrap each LLM call.
 
-### Grafana Queries
-
-```promql
-# LLM latency by agent (p95)
-histogram_quantile(0.95, rate(frontdeskai_llm_call_duration_seconds_bucket[5m]))
-
-# Request rate by category
-rate(frontdeskai_category_total[5m])
-
-# Error rate
-rate(frontdeskai_agent_errors_total[5m])
-```
+Span attributes, PromQL/LogQL examples, the Grafana dashboard panels, and the known
+histogram-bucket and exporter pitfalls are documented in **[observability.md](observability.md)**.
+LLM-level tracing (prompts, completions, token cost) is covered in **[langfuse-setup.md](langfuse-setup.md)**.
 
 ## Security
 
