@@ -39,8 +39,17 @@ while IFS= read -r line; do
   export "$key=$value"
 done < "${ENV_FILE}"
 
-GROQ_API_KEY="${GROQ_API_KEY:?ERROR: GROQ_API_KEY not set in .env file}"
-AUTH_PASSWORD="${AUTH_PASSWORD:?ERROR: AUTH_PASSWORD not set in .env file}"
+# At least one LLM key is required. Ollama Cloud is the primary provider and Groq
+# the automatic fallback, so either alone is enough to get a working app.
+OLLAMA_API_KEY="${OLLAMA_API_KEY:-}"
+GROQ_API_KEY="${GROQ_API_KEY:-}"
+if [ -z "${OLLAMA_API_KEY}" ] && [ -z "${GROQ_API_KEY}" ]; then
+  echo "ERROR: no LLM API key found in ${ENV_FILE}."
+  echo "       Set OLLAMA_API_KEY (primary, https://ollama.com) and/or"
+  echo "       GROQ_API_KEY (fallback, https://console.groq.com), then rerun this script."
+  exit 1
+fi
+AUTH_PASSWORD="${AUTH_PASSWORD:-brainupgrade}"
 
 CURRENT_CONTEXT=$(kubectl config current-context 2>/dev/null || echo "")
 
@@ -65,9 +74,15 @@ apply_secret() {
   )
   if [ -n "${OLLAMA_API_KEY:-}" ]; then
     SECRET_ARGS+=(--from-literal=OLLAMA_API_KEY="${OLLAMA_API_KEY}")
-    echo "    Ollama API key included"
+    echo "    Ollama API key included (primary LLM)"
   else
-    echo "    OLLAMA_API_KEY not set — Ollama Cloud fallback will be disabled"
+    echo "    OLLAMA_API_KEY not set — the primary provider is unavailable, every"
+    echo "    request will be served by the Groq fallback"
+  fi
+  if [ -n "${GROQ_API_KEY:-}" ]; then
+    echo "    Groq API key included (fallback LLM)"
+  else
+    echo "    GROQ_API_KEY not set — no fallback if Ollama Cloud rate-limits"
   fi
   if [ -n "${LANGFUSE_SECRET_KEY:-}" ] && [ -n "${LANGFUSE_PUBLIC_KEY:-}" ] && [ -n "${LANGFUSE_HOST:-}" ]; then
     SECRET_ARGS+=(

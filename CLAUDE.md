@@ -10,6 +10,21 @@ FrontDesk AI is a self-evolving agentic AI employee support desk built with Fast
 
 ## Quick Start
 
+### One command (any environment)
+
+```bash
+cp .env.example .env          # set OLLAMA_API_KEY and/or GROQ_API_KEY
+bash scripts/quickstart.sh    # cluster if missing → app → MCP → health check → seed verification
+```
+
+`quickstart.sh` is the supported participant path and is idempotent. It pulls `OLLAMA_API_KEY`,
+`GROQ_API_KEY` and `LANGFUSE_*` from the environment into `.env` (Codespaces secrets), fails early with
+instructions when no LLM key is set, and prints the demo logins when the app answers `/health`.
+`SKIP_MCP=true` skips the PostgreSQL/MCP stack.
+
+In a Codespace, `.devcontainer/setup.sh` runs `quickstart.sh` automatically when a key is available from a
+Codespaces secret — clone, launch, done, with demo data already seeded.
+
 ### Local (without Kubernetes)
 
 ```bash
@@ -75,14 +90,14 @@ app/
 
 | File | Purpose |
 |------|---------|
-| `app/app.py` | FastAPI routes: login, chat, KB management, analytics API, admin gates |
+| `app/app.py` | FastAPI routes: login, chat, KB management, analytics API, admin gates, `/chat/feedback` (👍/👎 → few-shot memory). The chat reply returns the audit trail to every user (it was already rendered on `/chat` reload); the raw `tool_calls` list stays admin-only |
 | `app/agents.py` | LangGraph StateGraph: supervisor, 8 domain workers, QA, manager, fallback. Dynamic LLM factory (`get_llm()`) supports Ollama Cloud, Groq, and OpenRouter providers |
 | `app/auth.py` | Password hashing (PBKDF2-SHA256, 600k iter), `users` table, `current_user_email` ContextVar |
-| `app/tools.py` | LangChain `@tool` functions for each domain + schema/seed data. HR tools include `get_leave_balance_from_hr_system` (MCP client) as the primary leave tool |
+| `app/tools.py` | LangChain `@tool` functions for each domain + schema/seed data. HR tools include `get_leave_balance_from_hr_system` (MCP client) as the primary leave tool. Domain tools take **no** identity argument — `_get_current_employee_id()` reads the `current_user_email` ContextVar. `approve_expense_claim(claim_id, status)` additionally checks *authority* via `_expense_approval_denial()`: the claimant's manager, or a finance department member whose designation contains lead/manager/director/head/vp/chief, and never the claimant themselves |
 | `app/skills.py` | Dynamic skill registry: load/install/list/configure skills, web research tools, `skill_config()` helper, runtime tool injection |
 | `app/rag.py` | ChromaDB indexing of `app/data/policies/*.md` into the `unigps_policies` collection, retrieval with category filtering (ONNX embeddings, no torch). Persists to `$CHROMA_DIR` (default `/shared/chromadb`) |
-| `app/fewshot.py` | Few-shot memory — successful Q&A pairs in the `fewshot_examples` Chroma collection, retrieved per-category by semantic similarity and injected into domain worker prompts |
-| `app/observability.py` | OpenTelemetry metrics, Prometheus exporter, JSON logging, Langfuse integration |
+| `app/fewshot.py` | Few-shot memory — successful Q&A pairs in the `fewshot_examples` Chroma collection, retrieved per-category by semantic similarity and injected into domain worker prompts. Written by a 👍 via `/chat/feedback` when `_qualifies_for_fewshot` passes (confidence ≥ 7, not escalated, not fallback, category not general/blank); 👎 removes it from SQLite and Chroma. Memory is per-category and shared across users |
+| `app/observability.py` | OpenTelemetry metrics, Prometheus exporter, JSON logging, Langfuse integration. One process-wide Langfuse `CallbackHandler` (langfuse 2.x builds a client + consumer threads per handler, so per-request handlers leaked threads); per-request identity travels as `langfuse_metadata()` in the RunnableConfig; `flush_langfuse()` runs on shutdown; `JsonFormatter` emits every `extra=` field |
 | `mcp/mcp-postgre/mcp_leave_server.py` | FastMCP server (streamable-http, port 8001) — `get_leave_balance`, `get_leave_usage`, and `approve_leave` (records the request and deducts days atomically) backed by PostgreSQL. Unknown employee_ids are auto-provisioned with the default entitlement |
 | `mcp/postgre/configmap-init.yaml` | PostgreSQL init SQL — employees/leave_balances/leave_requests in the default `public` schema + 4 seed employees with leave data |
 | `scripts/deploy-mcp.sh` | Deploy MCP stack (PostgreSQL + MCP server) into `postgres` namespace, includes smoke test |
@@ -139,6 +154,9 @@ cd app && python -c "from tools import DOMAIN_TOOLS; print(list(DOMAIN_TOOLS.key
 # Verify skills module
 cd app && python -c "from skills import load_all_skills; print(load_all_skills())"
 
+# Fresh clone → running demo (creates cluster if needed, deploys app + MCP, verifies seed)
+bash scripts/quickstart.sh
+
 # Build and deploy to kind cluster (single command)
 bash scripts/deploy.sh       # build + load/push + apply manifests, auto-detects kind vs production
 
@@ -172,7 +190,7 @@ kubectl logs deployment/frontdeskai
 | `OTEL_SERVICE_NAME` | No | `frontdeskai` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | `http://tempo.monitoring.svc.cluster.local:4317` |
 | `LOG_LEVEL` | No | `INFO` |
-| `SEED_DEMO_DATA` | No | `false` — set to `true` to pre-populate employees, tickets, expenses, leave, rooms, payslips for demos |
+| `SEED_DEMO_DATA` | No | `false` in code — but `true` in both `deployment.yaml` and `.env.example`, so every documented path starts with 10 employees, leave balances, tickets, expenses, rooms and payslips. The seed is idempotent (`INSERT OR IGNORE`), so it fills gaps on restart without overwriting runtime changes |
 | `LANGFUSE_SECRET_KEY` | No (LLM tracing) | — all three Langfuse vars must be set, else tracing is disabled |
 | `LANGFUSE_PUBLIC_KEY` | No (LLM tracing) | — |
 | `LANGFUSE_HOST` | No (LLM tracing) | — region-specific: `https://us.cloud.langfuse.com` or `https://cloud.langfuse.com` (EU); traces are only visible in the UI of the matching region |
@@ -234,8 +252,9 @@ get_leave_balance_from_hr_system  ──────→  FastMCP · streamable-h
 
 | File | Description |
 |------|-------------|
+| `scripts/quickstart.sh` | **Participant entry point** — validates/populates `.env`, creates the cluster if missing, deploys app + MCP, waits for `/health`, verifies seeded row counts, prints demo logins. Idempotent; `SKIP_MCP=true` to skip MCP |
 | `scripts/create-kind-cluster.sh` | One-time localhost/cloud-labs setup — creates kind cluster `frontdeskai` with NodePort mappings + `/shared/.sqlite`; equivalent of `.devcontainer/setup.sh` for non-Codespace hosts |
-| `scripts/deploy.sh` | One-command deploy — build + load/push + apply manifests + rollout restart, auto-detects kind vs production; preserves existing `SECRET_KEY` to avoid breaking encrypted DB values |
+| `scripts/deploy.sh` | One-command deploy — build + load/push + apply manifests + rollout restart, auto-detects kind vs production; preserves existing `SECRET_KEY` to avoid breaking encrypted DB values. Requires **at least one** of `OLLAMA_API_KEY` / `GROQ_API_KEY` (neither is individually mandatory) |
 | `scripts/deploy-mcp.sh` | Deploy MCP Leave Service — PostgreSQL + MCP server into `postgres` namespace + smoke test |
 | `scripts/update-secret.sh` | Update K8s secret from `.env` without rebuilding image (preserves SECRET_KEY, includes OLLAMA_API_KEY + GROQ_API_KEY + Langfuse) |
 | `scripts/install-observability.sh` | Install Prometheus, Grafana, Loki, Promtail, Tempo via Helm into `monitoring` namespace |
@@ -258,7 +277,8 @@ get_leave_balance_from_hr_system  ──────→  FastMCP · streamable-h
 **Codespace** — devcontainer (`.devcontainer/`) provisions automatically:
 - Base image: `mcr.microsoft.com/devcontainers/python:3.13-bookworm` — Python minor kept in sync with `Containerfile` (`python:3.13-slim`); Bookworm required (Bullseye has an expired Yarn GPG key that breaks the Docker-in-Docker install)
 - Features: `docker-in-docker:2`, `kubectl-helm-minikube:1`
-- `postCreateCommand`: `.devcontainer/setup.sh` — installs kind binary, seeds `.env`, then delegates to `scripts/create-kind-cluster.sh` (cluster + `/shared/.sqlite`). App deps are deliberately **not** pip-installed here; they live in the image built from `Containerfile`, so the app runs only in the kind cluster.
+- `postCreateCommand`: `.devcontainer/setup.sh` — seeds `.env`, copies `OLLAMA_API_KEY` / `GROQ_API_KEY` / `LANGFUSE_*` from Codespaces secrets into it, delegates to `scripts/create-kind-cluster.sh` (cluster + `/shared/.sqlite`), then runs `scripts/quickstart.sh` **if a key is present** so the codespace comes up with a deployed, seeded app. With no key it prints the two remaining steps instead. App deps are deliberately **not** pip-installed here; they live in the image built from `Containerfile`, so the app runs only in the kind cluster.
+- Participant-facing setup lives in `participant-instructions.md`; the guided demo tour lives in `use-case-scenarios.md`.
 
 **cloud-labs / localhost** — run once manually:
 ```bash
@@ -301,5 +321,7 @@ prometheus.io/path: "/metrics"
 - Skill config is stored in `system_config` with `skill.{name}.{key}` namespacing; secrets use `_enc` suffix and Fernet encryption
 - Admin routes use `_require_admin()` helper, gated by `ADMIN_EMAILS`
 - User input in prompts is wrapped in `[USER_REQUEST_START]`/`[USER_REQUEST_END]` delimiters
+- Tools never accept caller identity (`employee_id`, `approver_id`, `booked_by`) as an argument — it comes from the `current_user_email` ContextVar. Worker prompts must not instruct the model to pass one; MCP tools are the exception, since the remote roster is keyed by `employee_id`
+- Worker and manager prompts inject the current date (`Today is …`) so relative dates like "tomorrow" resolve correctly — the model has no clock of its own
 - All SQL uses parameterized queries; column names are never constructed from user input
 - `app/app.py` uses `__file__`-relative paths for `StaticFiles` and `Jinja2Templates` (required when running from repo root as `python app/app.py`)

@@ -10,7 +10,7 @@ FrontDesk AI (FastAPI + LangGraph)
 ├── OpenTelemetry ──→ Tempo/Prometheus/Loki ──→ Grafana
 │   (infrastructure observability: spans, metrics, logs)
 │
-└── Langfuse ──→ Langfuse Cloud (https://cloud.langfuse.com)
+└── Langfuse ──→ Langfuse Cloud (region-specific: us.cloud.langfuse.com or cloud.langfuse.com)
     (LLM observability: prompts, completions, tokens, cost, sessions)
 ```
 
@@ -25,10 +25,12 @@ Langfuse integrates via the `LangfuseCallbackHandler` — a LangChain-compatible
 ```
 User Request → app/app.py
   │
-  ├── Creates LangfuseCallbackHandler (per request)
-  │     user_id = email, session_id = email
+  ├── Reuses the one process-wide LangfuseCallbackHandler
+  │     identity travels per request as config metadata:
+  │     langfuse_user_id / langfuse_session_id = email
   │
-  └── compiled.invoke(state, config={"callbacks": [lf_handler]})
+  └── compiled.invoke(state, config={"callbacks": [lf_handler],
+                                     "metadata": langfuse_metadata(...)})
         │
         ├── supervisor → llm.invoke(prompt)  ← Langfuse captures
         ├── hr_worker  → llm.invoke(prompt)  ← Langfuse captures
@@ -71,27 +73,51 @@ def init_observability():
     elif lf_secret and lf_public and lf_host:
         langfuse_enabled = True
 
-def get_langfuse_handler(user_id="", session_id=""):
+_lf_handler = None  # one per process — see the note below
+
+def get_langfuse_handler():
+    global _lf_handler
     if not langfuse_enabled or LangfuseCallbackHandler is None:
         return None
-    return LangfuseCallbackHandler(
-        user_id=user_id,
-        session_id=session_id,
-    )
+    if _lf_handler is None:
+        _lf_handler = LangfuseCallbackHandler()
+        logger.info("Langfuse handler ready",
+                    extra={"langfuse_host": os.environ.get("LANGFUSE_HOST", ""),
+                           "auth_check": _lf_handler.auth_check()})
+    return _lf_handler
+
+def langfuse_metadata(user_id="", session_id=""):
+    return {"langfuse_user_id": user_id, "langfuse_session_id": session_id}
+
+def flush_langfuse():
+    if _lf_handler is not None:
+        _lf_handler.langfuse.flush()
 ```
+
+**Why one handler, not one per request:** in langfuse 2.x every `CallbackHandler()` constructs its own
+`Langfuse` client, with its own consumer thread, prompt-refresh thread and HTTP connection — none of
+which are ever closed. Building one per chat leaked roughly two threads per request and left queued
+events with no owner at shutdown. The handler is therefore created once and identity is passed per
+request through the RunnableConfig metadata keys the LangChain integration reads
+(`langfuse_user_id`, `langfuse_session_id`). `flush_langfuse()` runs from the FastAPI lifespan shutdown
+so a `rollout restart` does not drop queued traces.
 
 **`app/app.py`** — Per-request callback attachment:
 
 ```python
-from observability import get_langfuse_handler
+from observability import get_langfuse_handler, langfuse_metadata, flush_langfuse
 
 # Inside send_message() → run_graph():
-lf_handler = get_langfuse_handler(user_id=user, session_id=user)
+lf_handler = get_langfuse_handler()
 config = {"configurable": {"thread_id": user}}
 if lf_handler:
     config["callbacks"] = [lf_handler]
+    config["metadata"] = langfuse_metadata(user_id=user, session_id=user)
 
 result = compiled.invoke(initial_state, config)
+
+# …and in the lifespan shutdown path:
+flush_langfuse()
 ```
 
 **`app/agents.py`** — Explicit propagation into each node:
@@ -117,7 +143,7 @@ calls) and in `manager_agent()`.
 |----------|----------|---------|-------------|
 | `LANGFUSE_SECRET_KEY` | Yes | `sk-lf-9327d358-...` | Langfuse project secret key |
 | `LANGFUSE_PUBLIC_KEY` | Yes | `pk-lf-04cea526-...` | Langfuse project public key |
-| `LANGFUSE_HOST` | Yes | `https://cloud.langfuse.com` | Langfuse server URL |
+| `LANGFUSE_HOST` | Yes | `https://us.cloud.langfuse.com` | Region-specific server URL — US and EU are separate installations with separate keys and separate UIs. Keys from one region never show data in the other |
 
 All three must be set for Langfuse to activate. If any are missing, or if the `langfuse` package is unavailable, the app starts normally without Langfuse — no errors, just a startup log line indicating the reason.
 
@@ -146,10 +172,13 @@ LANGFUSE_HOST=https://cloud.langfuse.com
 
 ### Kubernetes Deployment
 
-The `deploy.sh` script reads `.env` and creates a K8s secret with all keys:
+The keys only reach the pod through the `frontdeskai-secret` K8s secret. **Editing `.env` alone changes
+nothing in a running cluster** — this is the most common reason for "keys are configured but Langfuse is
+empty". Rebuild the secret and restart:
 
 ```bash
-bash scripts/deploy.sh
+bash scripts/deploy.sh          # or, without an image rebuild:
+bash scripts/update-secret.sh
 ```
 
 The deployment manifest mounts Langfuse env vars from the secret with `optional: true`, so the app starts even if Langfuse keys are absent:
@@ -233,12 +262,17 @@ After sending traffic, the Langfuse web UI shows:
 kubectl logs deployment/frontdeskai --tail=10 | head -5
 ```
 
-Look for:
+Look for both lines — the first at startup, the second on the first chat request:
+
 ```json
-{"message": "Langfuse enabled", "langfuse_host": "https://cloud.langfuse.com"}
+{"message": "Langfuse enabled", "langfuse_host": "https://us.cloud.langfuse.com"}
+{"message": "Langfuse handler ready", "langfuse_host": "https://us.cloud.langfuse.com", "auth_check": true}
 ```
 
-If you see `"Langfuse disabled"` instead, check that all three env vars are set in the K8s secret.
+`"auth_check": true` means the keys authenticated against that host. `false` (or an `error:` string)
+means the app is configured but the credentials or the region are wrong — traces will never appear no
+matter how much traffic you send. If you see `"Langfuse disabled"` instead, all three env vars are not
+set in the K8s secret.
 
 ### 2. Send a Test Request
 
@@ -506,10 +540,25 @@ kubectl get secret frontdeskai-secret -o jsonpath='{.data.LANGFUSE_HOST}' | base
 
 ### No traces appearing in Langfuse Cloud
 
-1. Verify the app logs show `"Langfuse enabled"` at startup
-2. Send a chat request (health checks don't trigger Langfuse)
-3. Langfuse batches events — traces may take 5-10 seconds to appear
-4. Check Langfuse project settings match the keys in `.env`
+Work down this list — the first two causes account for most cases:
+
+1. **The keys never left `.env`.** They reach the pod via the K8s secret, so run
+   `bash scripts/deploy.sh` (or `scripts/update-secret.sh`) after editing `.env`, then confirm:
+   `kubectl exec deployment/frontdeskai -- printenv | grep LANGFUSE`
+2. **Wrong region.** `us.cloud.langfuse.com` and `cloud.langfuse.com` are separate installations. Keys
+   issued in one region authenticate only there, and the other region's UI will show an empty project.
+   Check `LANGFUSE_HOST` against the URL you are browsing.
+3. Verify the app logs show `"Langfuse enabled"` **and** `"auth_check": true` (see above).
+4. Send a chat request — health checks make no LLM calls, so they produce no traces.
+5. Langfuse batches and then queues server-side; a trace can take up to a minute to appear.
+6. Confirm from outside the UI, using the same keys:
+
+```bash
+set -a; . ./.env; set +a
+curl -s -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" "$LANGFUSE_HOST/api/public/traces?limit=3"
+```
+
+If the API returns traces but the UI looks empty, you are looking at the wrong project or region.
 
 ### ModuleNotFoundError: langchain
 

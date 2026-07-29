@@ -23,21 +23,30 @@ Skills, LLM provider, and SMTP settings survive restarts.
 ```bash
 git clone https://github.com/brainupgrade-in/aiagentic-comp-frontdeskai.git
 cd aiagentic-comp-frontdeskai
-cp .env.example .env          # set OLLAMA_API_KEY (primary) + GROQ_API_KEY (fallback)
+cp .env.example .env          # set OLLAMA_API_KEY (primary) and/or GROQ_API_KEY (fallback)
 
-bash scripts/deploy.sh        # Kubernetes (Codespace or kind) — the supported path
+bash scripts/quickstart.sh    # cluster if needed → app → MCP → health check → seed check
+```
 
-# …or run directly against a Python env
+That is the whole setup. `quickstart.sh` is idempotent, so re-run it any time.
+
+In a **Codespace** you can skip even that: save `OLLAMA_API_KEY` as a Codespaces secret before you create
+the codespace, and the devcontainer deploys everything for you — wait for the `FrontDesk AI is ready`
+banner.
+
+```bash
+# …or run directly against a Python env, no Kubernetes
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r app/requirements.txt && python app/app.py
 ```
 
-Open **http://localhost:8000**, log in with any email + `brainupgrade`. First login hashes and stores
-that password per user; the shared password stops working for them afterwards.
+Open **http://localhost:8000** and log in as `rajesh.kumar@unigps.in` with `brainupgrade`. First login
+hashes and stores that password per user; the shared password stops working for them afterwards.
 
-The Kubernetes deploy seeds demo data (`SEED_DEMO_DATA=true` in `deployment.yaml`), so log in as a seeded
-employee — `rajesh.kumar@unigps.in` or `admin@unigps.in` — and follow
-**[use-case-scenarios.md](use-case-scenarios.md)** for a guided tour of what the system can do.
+Demo data is pre-seeded (`SEED_DEMO_DATA=true` in `deployment.yaml` and `.env.example`): 10 employees,
+leave balances, tickets, expense claims, meeting rooms and payslips — so every scenario has real state to
+read and write. Follow **[use-case-scenarios.md](use-case-scenarios.md)** for the guided tour; admin
+scenarios need `admin@unigps.in`.
 
 ## Architecture
 
@@ -66,9 +75,11 @@ Clarify      RAG Retrieval → Few-shot Retrieval               │
 admin-gated — non-admins are redirected to `general`.
 
 **Features:** structured LLM routing with low-confidence clarification · RAG over policy docs (ChromaDB,
-ONNX embeddings — no torch) · few-shot memory of past Q&A · ReAct tool loop (3 iterations) · QA gate with
-PII redaction and one self-correction retry · runtime skill install with encrypted per-skill config ·
-chat-configurable LLM provider, fallback, and SMTP · admin analytics dashboard · knowledge base upload.
+ONNX embeddings — no torch) · few-shot memory grown from 👍 feedback · ReAct tool loop (3 iterations) · QA
+gate with PII redaction and one self-correction retry · identity and approval authority resolved from the
+session and the employees table, never from the prompt · runtime skill install with encrypted per-skill
+config · chat-configurable LLM provider, fallback, and SMTP · analytics by chat or dashboard · knowledge
+base upload.
 
 ```
 app/
@@ -134,11 +145,17 @@ FrontDesk AI                          MCP Leave Server (:8001)
   (urllib JSON-RPC POST)                public schema
 ```
 
-`bash scripts/deploy-mcp.sh` deploys PostgreSQL + the server and runs a smoke test. Then ask *"How many
-leaves do I have left?"* — the HR worker POSTs a JSON-RPC call to
+`bash scripts/deploy-mcp.sh` deploys PostgreSQL + the server and runs a smoke test (`quickstart.sh` does
+this for you). Then ask *"How many leaves do I have left?"* — the HR worker POSTs a JSON-RPC call to
 `http://mcp-leave.postgres.svc.cluster.local:8001/mcp`. Transport is `streamable-http` (stateless): one
 POST carries the call and returns an SSE-formatted response, no session handshake. Full diagram:
 [`mcp/mcp-postgre/design.html`](mcp/mcp-postgre/design.html).
+
+It writes as well as reads: `approve_leave` records an approved request and deducts the days atomically,
+and the escalation **manager** node calls it through `approve_leave_via_mcp`, so a leave request over the
+policy limit is settled by a write into that remote database. Employee ids the server has not seen are
+auto-provisioned with the default entitlement (12 casual / 6 sick / 15 earned / 24 WFH), which is why an
+app employee's balance comes from PostgreSQL rather than the app's own SQLite seed.
 
 ## Configuration
 
@@ -192,7 +209,9 @@ tracing: **[langfuse-setup.md](langfuse-setup.md)**.
   traversal protection
 - Prompt injection guardrails — delimiter-wrapped user input, PII detection/redaction in the QA gate
 - Admin access gated by `ADMIN_EMAILS`; tool identity comes from a server-set `ContextVar` the LLM
-  cannot influence
+  cannot influence — no tool accepts an `employee_id`, `approver_id` or `booked_by` argument
+- Approval authority is a separate check against the `employees` table: an expense claim can only be
+  decided by the claimant's manager or a senior finance approver, and never by the claimant
 - SMTP password and secret skill config encrypted at rest with Fernet, key derived from `SECRET_KEY`
   (rotating it requires re-running `configure_smtp`)
 

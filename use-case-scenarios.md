@@ -6,10 +6,13 @@ new capability while you watch.
 
 ## Before You Start
 
-**1. Demo data must be seeded.** `scripts/manifests/deployment.yaml` sets `SEED_DEMO_DATA=true`, so a
-fresh `bash scripts/deploy.sh` populates 10 employees, leave balances, 5 tickets, 5 expense claims,
-5 meeting rooms, and payslips. If you deployed before this was enabled, the PVC already holds an empty
-DB — the seed is idempotent and will fill in on the next pod start:
+**1. Demo data is already seeded.** `bash scripts/quickstart.sh` (or a Codespace launched with an
+`OLLAMA_API_KEY` secret) deploys the app with `SEED_DEMO_DATA=true`, which populates 10 employees, leave
+balances, 5 tickets, 5 expense claims, 5 meeting rooms, and payslips — and then verifies the row counts
+before telling you it is ready. Part 9 additionally needs the MCP stack, which `quickstart.sh` deploys
+too.
+
+If your PVC predates the seed flag, the seed is idempotent and fills in on the next pod start:
 
 ```bash
 kubectl rollout restart deployment/frontdeskai
@@ -525,7 +528,8 @@ OCI API private key is set through conversation and stored encrypted — no Kube
 
 ## Part 9 — Reaching Outside: MCP
 
-Requires `bash scripts/deploy-mcp.sh` (PostgreSQL + MCP Leave Server in the `postgres` namespace).
+Already deployed if you ran `scripts/quickstart.sh`; otherwise `bash scripts/deploy-mcp.sh` (PostgreSQL +
+MCP Leave Server in the `postgres` namespace).
 
 The MCP server has its **own** employee roster, separate from the app's SQLite. Log in as
 `alice@unigps.in` and ask:

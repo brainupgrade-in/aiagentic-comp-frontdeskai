@@ -22,11 +22,27 @@ automatic — you never pick a category.
 | *"When will my travel expense be reimbursed?"* | Finance |
 | *"Show my last 3 months payslips"* | Finance |
 | *"Book the Ganges room for 2pm tomorrow for 6 people"* | Facilities |
+| *"I spent INR 3,200 on a client dinner — please claim it"* | Finance (submits a claim) |
+| *"Approve expense claim EXP-2026-0002"* | Finance (only if you have the authority — see below) |
+| *"How many tickets are open, and what is the escalation rate this week?"* | Analytics |
 | *"I want to change my password"* | Account |
 
-Every response has 👍 / 👎 buttons; feedback shows up in the admin analytics dashboard. Requests the
-agent can't resolve are escalated to a manager for policy exceptions, or you get the right team's contact
-details.
+Follow-up messages keep their context — after asking about casual leave, just *"and sick?"* works, and
+after a booking, *"move it to 3pm"*. Relative dates like *"tomorrow"* or *"next Monday"* are resolved
+against the real date.
+
+Every response has 👍 / 👎 buttons, and they do more than feed the dashboard: a 👍 on a
+confident, non-escalated answer stores that question/answer pair as a **few-shot example**, so later
+questions in the same category — from anyone — are answered with your approved answer as a precedent. 👎
+removes it again. You are curating the system's memory, not just rating it.
+
+Requests the agent can't resolve are escalated to a manager for policy exceptions, or you get the right
+team's contact details.
+
+**What you can decide.** Expense approvals are checked against the org chart, not the conversation: only
+the claimant's manager or a senior finance approver (Finance Lead and above) can approve or reject a
+claim, and nobody can decide their own. Asking more insistently does not change the answer — the check
+happens in the database.
 
 ---
 
@@ -43,11 +59,15 @@ indexed into the RAG store immediately and cited by the HR, Tech, Finance, and F
 ### Analytics
 
 **Analytics** in the header shows conversation volume, category breakdown, escalation and fallback rates,
-confidence distribution, and 👍/👎 summary. The same data is available in chat:
+confidence distribution, and 👍/👎 summary. The same data is available in chat — and unlike the dashboard,
+chat analytics are open to every employee:
 
 ```
 How many tickets were raised today?
 Show escalation rate for this week
+Show me room utilisation for this month
+Summarise expense claims by status
+What is the leave usage across the company?
 ```
 
 ### LLM Configuration
