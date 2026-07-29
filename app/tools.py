@@ -272,6 +272,7 @@ CREATE TABLE IF NOT EXISTS employees (
         ("vikram.singh", "Vikram Singh",         "vikram.singh@unigps.in", "finance",     "Finance Analyst",   "2024-03-10", "amit.patel"),
         ("sneha.reddy",  "Sneha Reddy",          "sneha.reddy@unigps.in",  "facilities",  "Facilities Manager", "2022-07-15", None),
         ("neha.gupta",   "Neha Gupta",           "neha.gupta@unigps.in",   "facilities",  "Facilities Coordinator", "2023-11-05", "sneha.reddy"),
+        ("anita.verma",  "Anita Verma",          "anita.verma@unigps.in",  "hr",          "HR Director",       "2020-03-15", None),
     ]
     conn.executemany(
         "INSERT OR IGNORE INTO employees (employee_id, full_name, email, department, designation, date_of_join, manager_id) "
