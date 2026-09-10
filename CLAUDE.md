@@ -193,7 +193,7 @@ kubectl logs deployment/frontdeskai
 | `CHROMA_DIR` | No | `/shared/chromadb` |
 | `MCP_LEAVE_URL` | No | `http://mcp-leave.postgres.svc.cluster.local:8001/mcp` (set in `deployment.yaml`) |
 | `OTEL_SERVICE_NAME` | No | `frontdeskai` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | No | `http://tempo.monitoring.svc.cluster.local:4317`. **Set it to the empty string to skip the OTLP exporter entirely** — `BatchSpanProcessor` swallows export failures, so a wrong endpoint drops every span while the app looks healthy. There is no Tempo on the Spark cluster |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | No | `http://tempo.monitoring.svc.cluster.local:4317`. **Set it to the empty string to skip the OTLP exporter entirely** — `BatchSpanProcessor` swallows export failures, so a wrong endpoint drops every span while the app looks healthy. Tempo runs in `monitoring` on the Spark cluster since 2026-09-11 |
 | `LOG_LEVEL` | No | `INFO` |
 | `SEED_DEMO_DATA` | No | `false` in code — but `true` in both `deployment.yaml` and `.env.example`, so every documented path starts with 10 employees, leave balances, tickets, expenses, rooms and payslips. The seed is idempotent (`INSERT OR IGNORE`), so it fills gaps on restart without overwriting runtime changes |
 | `LANGFUSE_SECRET_KEY` | No (LLM tracing) | — all three Langfuse vars must be set, else tracing is disabled |
@@ -304,7 +304,26 @@ SHA and `latest`, for **linux/amd64 and linux/arm64**.
 | **No internet egress** | `participant-egress` allows DNS, the `llm-serving` namespace, ingress-nginx and Langfuse:3000 — **nothing else**. This is *not* the `agenticai` sandbox namespace, which has `allow-egress-internet`. Anything fetched at startup must be baked into the image |
 | **1Gi of memory limits for the whole namespace** | One pod at a 1Gi limit consumes all of it, so the Deployment uses `strategy: Recreate`. A RollingUpdate surges a second pod, which is quota-denied, and the rollout hangs with no useful message. A `kubectl run` debug pod is refused for the same reason — use `kubectl exec` into the app container, which ships Python |
 | **Zero NodePorts** | `services.nodeports: 0`. ClusterIP + Ingress only |
-| **The host is behind Cloudflare** | It answers the default Python user agent with `403` and `error code: 1010` — a block from the edge that never reaches the app and reads exactly like a broken deployment. Anything scripted against the public hostname needs a `User-Agent` header |
+| **The host is behind Cloudflare** | Two separate traps. It answers the default Python user agent with `403` / `error code: 1010`, so anything scripted against the public hostname needs a `User-Agent` header. And it gives up at **~100s with a 524** — a three-turn agent request exceeds that whenever the gateway is slow, and the 524 reads as a broken app while the pod is still working. Script against the pod (`kubectl exec … python3`), not the hostname |
+
+### Traces go to Tempo in the `monitoring` namespace
+
+`deploy-spark.sh` points `OTEL_EXPORTER_OTLP_ENDPOINT` at
+`tempo.monitoring.svc.cluster.local:4317` and sets
+**`OTEL_SERVICE_NAME=frontdeskai-<namespace>`** — one Tempo serves the whole cohort, so the
+service name has to carry the namespace or nobody can find their own traces. Read them in
+Grafana: *Explore → Tempo → service.name*.
+
+What a request produces, measured on u31: a `chat.send` root span with `user.email`,
+`chat.history_turns` and `chat.category`, and a child span per agent step —
+`llm.supervisor`, `llm.hr_react_iter_0..2`, `llm.hr_worker_final` — each carrying
+`llm.tokens`. That is the view Langfuse does not give: Langfuse shows generations, this shows
+where the wall-clock went across the whole graph.
+
+⚠️ **A missing NetworkPolicy is invisible from inside the app.** The participant namespace is
+default-deny egress; without a rule for `monitoring:4317` the exporter fails and
+`BatchSpanProcessor` swallows it, so the app is healthy, the config looks right, and no span
+ever lands. The rules live in `mtvlab/agenticai/tempo/`.
 
 ### The LLM comes from the platform, not from a vendor key
 

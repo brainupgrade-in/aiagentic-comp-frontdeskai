@@ -36,10 +36,13 @@ fi
 IMAGE="${IMAGE:-brainupgrade/frontdeskai:latest}"
 LLM_SECRET="${LLM_SECRET:-${NAMESPACE}-llm}"
 AUTH_PASSWORD="${AUTH_PASSWORD:-brainupgrade}"
+# One Tempo serves the whole cohort, so the service name carries the namespace.
+OTEL_SERVICE_NAME="${OTEL_SERVICE_NAME:-frontdeskai-${NAMESPACE}}"
 
 echo "==> Namespace: ${NAMESPACE}"
 echo "==> Host:      https://${APP_HOST}"
 echo "==> Image:     ${IMAGE}"
+echo "==> Traces:    service ${OTEL_SERVICE_NAME} -> Tempo in ns monitoring"
 
 if ! kubectl -n "${NAMESPACE}" get secret "${LLM_SECRET}" >/dev/null 2>&1; then
   echo "WARNING: Secret '${LLM_SECRET}' not found in ${NAMESPACE}."
@@ -66,7 +69,8 @@ kubectl -n "${NAMESPACE}" create secret generic frontdeskai-secret \
 
 # ── Manifests ────────────────────────────────────────────────────────────────
 echo "==> Applying manifests"
-kubectl -n "${NAMESPACE}" apply -f "${MANIFESTS}/configmap.yaml"
+sed -e "s|SERVICE_NAME_PLACEHOLDER|${OTEL_SERVICE_NAME}|" \
+    "${MANIFESTS}/configmap.yaml" | kubectl -n "${NAMESPACE}" apply -f -
 kubectl -n "${NAMESPACE}" apply -f "${MANIFESTS}/service.yaml"
 
 sed -e "s|image: DOCKERHUB_USERNAME/frontdeskai:latest|image: ${IMAGE}|" \
@@ -86,3 +90,4 @@ echo "==> FrontDesk AI deployed."
 echo "    URL:    https://${APP_HOST}"
 echo "    Login:  rajesh.kumar@unigps.in / ${AUTH_PASSWORD}"
 echo "    Logs:   kubectl -n ${NAMESPACE} logs -f deploy/frontdeskai"
+echo "    Traces: Grafana -> Explore -> Tempo -> service.name = ${OTEL_SERVICE_NAME}"

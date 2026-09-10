@@ -21,11 +21,18 @@ data:
   # Pre-populate demo employees, leave, tickets, expenses, rooms, payslips.
   SEED_DEMO_DATA: "true"
 
-  # Observability. Prometheus metrics are served on /metrics either way; there
-  # is no Tempo on this cluster, so an empty endpoint skips the OTLP exporter
-  # instead of dropping every span silently.
-  OTEL_SERVICE_NAME: "frontdeskai"
-  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  # Observability. Prometheus metrics are served on /metrics either way; spans go
+  # to Tempo in the `monitoring` namespace over OTLP/gRPC.
+  #
+  # ⚠️ The service name carries the namespace, so 31 participants sharing one
+  # Tempo can each find their own traces in the service dropdown. deploy-spark.sh
+  # substitutes it; SERVICE_NAME_PLACEHOLDER is what it looks for.
+  #
+  # ⚠️ An empty OTEL_EXPORTER_OTLP_ENDPOINT disables the exporter entirely. Set it
+  # empty rather than wrong: BatchSpanProcessor swallows export failures, so a
+  # bad endpoint drops every span while the app looks perfectly healthy.
+  OTEL_SERVICE_NAME: "SERVICE_NAME_PLACEHOLDER"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo.monitoring.svc.cluster.local:4317"
   LOG_LEVEL: "INFO"
 
   # HOME is deliberately NOT set here. The image points it at /opt/appcache,
