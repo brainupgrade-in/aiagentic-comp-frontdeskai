@@ -52,19 +52,41 @@ Exposed at `GET /metrics` (Prometheus format).
 | `frontdeskai_llm_call_duration_seconds` | Histogram | `agent` | LLM call latency per agent |
 | `frontdeskai_llm_tokens_total` | Counter | `agent` | Total LLM tokens consumed |
 | `frontdeskai_category_total` | Counter | `category` | Requests by category (hr, tech, finance, etc.) |
-| `frontdeskai_escalations_total` | Counter | — | Requests escalated to manager |
-| `frontdeskai_fallbacks_total` | Counter | — | Fallback template responses |
+| `frontdeskai_escalations_total` | Counter | `category` | Requests escalated to manager |
+| `frontdeskai_fallbacks_total` | Counter | `category` | Fallback template responses |
 | `frontdeskai_agent_errors_total` | Counter | `agent` | Agent errors |
-| `frontdeskai_request_duration_seconds` | Histogram | — | End-to-end `/chat/send` latency |
+| `frontdeskai_request_duration_seconds` | Histogram | `category` | End-to-end `/chat/send` latency |
+
+⚠️ The three counters above are only exported **after their first increment** — OpenTelemetry's
+Prometheus exporter does not emit a zero-valued series for an instrument that has never fired. A
+dashboard panel reading them needs `or vector(0)`, or it shows "No data" on a healthy app.
+
+⚠️ **The `agent` label encodes the trajectory, not just the agent.** A worker's ReAct loop emits
+`<worker>_react_iter_<n>` per think-act-observe round, `<worker>_react_iter_<n>_fb` when the tool
+call raised, and `<worker>_worker_final` for the answer. It is bounded by `MAX_TOOL_ITERATIONS`
+(3), so cardinality is finite — and a series tagged `_react_iter_2` means that worker used the last
+iteration it had.
 
 ### PromQL Examples
 
+> ⚠️ **The two `histogram_quantile` examples below do not currently return real numbers.** Both
+> histograms are created with `unit="s"` and no explicit bucket boundaries, so OpenTelemetry applies
+> its default *millisecond* boundaries (`0, 5, 10, 25 … 10000`) to values recorded in seconds.
+> Measured on a live pod: `supervisor` had 12 calls totalling 18.8s and **all 12 fell in `le=5.0`**.
+> `histogram_quantile` can only interpolate inside that one bucket, so p50, p95 and p99 all return
+> roughly the same fabricated value. Use `_sum / _count` means until this is fixed — see
+> `todo/histogram_bucket_units.md`.
+
 ```promql
-# p95 request latency
+# p95 request latency  -- NOT VALID until the bucket boundaries are fixed
 histogram_quantile(0.95, sum(rate(frontdeskai_request_duration_seconds_bucket[5m])) by (le))
 
-# LLM call duration by agent (p95)
+# LLM call duration by agent (p95)  -- likewise
 histogram_quantile(0.95, sum(rate(frontdeskai_llm_call_duration_seconds_bucket[5m])) by (le, agent))
+
+# mean seconds per call by agent -- correct today, and what the workshop dashboard uses
+sum by (agent) (frontdeskai_llm_call_duration_seconds_sum)
+  / sum by (agent) (frontdeskai_llm_call_duration_seconds_count)
 
 # Token consumption rate per minute
 sum(rate(frontdeskai_llm_tokens_total[5m])) by (agent) * 60
@@ -138,8 +160,10 @@ All observability configuration is externalized via environment variables set in
 
 ### Kubernetes Pod Annotations
 
-For Prometheus to scrape the app, the pod template must carry these annotations. They are already
-set in `scripts/manifests/deployment.yaml` — nothing to do unless you are deploying by hand:
+⚠️ **There are two manifest sets and only one of them carries these annotations.**
+`scripts/manifests/deployment.yaml` has them; `scripts/manifests/spark/deployment.yaml` — the set
+`deploy-spark.sh` applies, and therefore the one every workshop participant actually deploys — does
+**not**. Verified 2026-09-11 against a live pod: `.spec.template.metadata.annotations` is empty.
 
 ```yaml
 spec:
@@ -150,6 +174,14 @@ spec:
         prometheus.io/port: "8000"
         prometheus.io/path: "/metrics"
 ```
+
+An annotation-discovery Prometheus (such as the one `install-observability.sh` brings up) will not
+find the app on the spark path until those three lines are added there too.
+
+The **workshop platform** does not depend on them. Its `frontdeskai-participants` scrape job matches
+on the pod **label** `app=frontdeskai` within an `agenticaiu<N>` namespace, precisely so that a
+participant has nothing to configure. It also relabels the namespace onto a `namespace` label, which
+is what the *FrontDesk AI — Agent Performance* dashboard filters on.
 
 ## Code Structure
 
@@ -273,9 +305,21 @@ Without `insecure=True`, the exporter attempts TLS and fails silently — traces
 - On graceful shutdown, `TracerProvider.shutdown()` flushes remaining spans — but container kill signals may not allow enough time
 - For debugging, set `OTEL_BSP_SCHEDULE_DELAY=1000` to flush every second
 
-## Grafana Dashboard
+## Grafana Dashboards
 
-A dedicated dashboard **"Agentic AI Observability"** is available in Grafana (`aiagentic-comp` folder).
+Two dashboards read these metrics.
+
+**"FrontDesk AI — Agent Performance"** (uid `frontdeskai-agent-performance`) is the workshop one:
+per-agent evaluation and tuning, filterable by participant namespace. Its JSON lives in the course
+repo under `resources/`, not here. It deliberately shows **means, not percentiles**, for the bucket
+reason above — where the time goes, where the tokens go, how many ReAct iterations each worker
+burned, and a per-agent scorecard.
+
+⚠️ **`resources/frontdeskai-dashboard.json` in this repo plots "Response Latency (P50 / P95 / P99)"
+on the broken buckets.** Those three lines are not measurements. Fix them, or drop the panel, when
+`todo/histogram_bucket_units.md` is done.
+
+A dedicated dashboard **"Agentic AI Observability"** is also available in Grafana (`aiagentic-comp` folder).
 
 **Panels (top to bottom):**
 
