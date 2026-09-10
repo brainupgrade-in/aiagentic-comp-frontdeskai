@@ -518,8 +518,10 @@ WORKER_CONFIGS = {
             "  5. If approve_leave_via_mcp reports the HR system is unreachable, call apply_leave "
             "instead — it records the request locally for HR review.\n"
             "Do NOT just explain policy — check balance and approve when the request is valid.\n"
-            "Never pass an employee_id — every tool, including the HR system tools, acts on the "
-            "caller's own record. If asked about someone else's leave, say you cannot access it.\n\n"
+            "Never pass an employee_id — every tool, including the HR system tools, automatically "
+            "acts on the caller's own record. The employee named in the request below IS the "
+            "caller, so their own leave is always in scope: check it, never refuse it. "
+            "Refuse only if the request names a DIFFERENT person than the employee named below.\n\n"
             "Escalate if: >10 days leave request, policy exceptions, or special circumstances."
         ),
         "can_escalate": True,
@@ -720,7 +722,8 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
          "{history}\n"
          "Today is {today}. Resolve relative dates such as 'tomorrow' or 'next Monday' "
          "against it and pass tools absolute YYYY-MM-DD dates.\n"
-         "Employee: {employee_name} (employee_id: {employee_id})\n"
+         "Employee making this request — this is the caller, and every tool acts on "
+         "their own record: {employee_name} (employee_id: {employee_id})\n"
          "[USER_REQUEST_START]\n{request}\n[USER_REQUEST_END]"),
     ])
 
