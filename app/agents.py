@@ -28,17 +28,21 @@ from skills import get_skill_tools
 
 # --- Dynamic LLM Configuration ---
 
+# Defaults come from the environment so a deployment can pick the provider
+# without touching code — the sandbox sets LLM_PROVIDER=litellm in a ConfigMap.
+# Unset env keeps the historical Ollama Cloud -> Groq pairing.
 _llm_config = {
-    "provider": "ollama",
-    "model": "gemma4:cloud",
+    "provider": os.getenv("LLM_PROVIDER", "ollama"),
+    "model": os.getenv("LLM_MODEL", "gemma4:cloud"),
     "temperature": 0.0,
-    "api_key": "",  # empty = use OLLAMA_API_KEY env var
+    "api_key": "",  # empty = use the provider's env var
 }
 _llm_fallback_config = {
-    "provider": "groq",
-    "model": "llama-3.3-70b-versatile",
+    "provider": os.getenv("LLM_FALLBACK_PROVIDER", "groq"),
+    # empty model disables the fallback (get_fallback_llm returns None)
+    "model": os.getenv("LLM_FALLBACK_MODEL", "llama-3.3-70b-versatile"),
     "temperature": 0.0,
-    "api_key": "",  # empty = use GROQ_API_KEY env var
+    "api_key": "",  # empty = use the provider's env var
 }
 _llm_cache: dict = {}  # keyed by config fingerprint
 
@@ -56,6 +60,25 @@ def _build_llm(cfg: dict):
             temperature=cfg["temperature"],
             api_key=SecretStr(api_key) if api_key else None,
             base_url="https://openrouter.ai/api/v1",
+        )
+    elif cfg["provider"] == "litellm":
+        # Any OpenAI-compatible gateway. The lab sandbox injects these per
+        # participant, so the app needs no key of its own and no vendor signup.
+        api_key = (
+            cfg["api_key"]
+            or os.getenv("LITELLM_API_KEY", "")
+            or os.getenv("OPENAI_API_KEY", "")
+        )
+        base_url = (
+            os.getenv("LITELLM_BASE_URL", "")
+            or os.getenv("OPENAI_BASE_URL", "")
+            or os.getenv("OPENAI_API_BASE", "")
+        )
+        return ChatOpenAI(
+            model=cfg["model"],
+            temperature=cfg["temperature"],
+            api_key=SecretStr(api_key) if api_key else None,
+            base_url=base_url or None,
         )
     elif cfg["provider"] == "ollama":
         api_key = cfg["api_key"] or os.getenv("OLLAMA_API_KEY", "")

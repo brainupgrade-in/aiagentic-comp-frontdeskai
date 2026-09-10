@@ -1,0 +1,27 @@
+# Serves the app on the participant's existing -app hostname. This object must
+# live in the participant namespace: an Ingress backend cannot cross namespaces,
+# which is why the platform's copy in namespace `agenticai` is removed first.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: frontdeskai
+  labels:
+    app: frontdeskai
+  annotations:
+    # The app streams chat responses; the defaults cut them off.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-body-size: "16m"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: APP_HOST
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontdeskai
+                port:
+                  number: 80

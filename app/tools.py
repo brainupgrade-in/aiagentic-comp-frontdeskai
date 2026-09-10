@@ -236,13 +236,16 @@ CREATE TABLE IF NOT EXISTS employees (
         );
     """)
     # Seed defaults (idempotent)
+    # Seeded from the environment so a deployment picks the provider without a
+    # code change; unset env keeps the historical Ollama -> Groq pairing. These
+    # rows win over agents.py's module defaults, so both must read the same env.
     config_defaults = [
-        ("llm_provider",    "ollama"),
-        ("llm_model",       "gemma3:12b"),
+        ("llm_provider",    os.getenv("LLM_PROVIDER", "ollama")),
+        ("llm_model",       os.getenv("LLM_MODEL", "gemma3:12b")),
         ("llm_temperature", "0"),
         ("llm_api_key",     ""),
-        ("llm_fallback_provider",    "groq"),
-        ("llm_fallback_model",       "llama-3.3-70b-versatile"),
+        ("llm_fallback_provider",    os.getenv("LLM_FALLBACK_PROVIDER", "groq")),
+        ("llm_fallback_model",       os.getenv("LLM_FALLBACK_MODEL", "llama-3.3-70b-versatile")),
         ("llm_fallback_temperature", "0"),
         ("llm_fallback_api_key",     ""),
         ("smtp_host",       ""),
@@ -1335,7 +1338,7 @@ def get_llm_config() -> str:
 
 @tool
 def change_llm_model(model_name: str, provider: str = "groq", temperature: float = 0.0, api_key: str = "") -> str:
-    """Change the LLM model used by all agents. provider: 'groq', 'openrouter', or 'ollama'.
+    """Change the LLM model used by all agents. provider: 'groq', 'openrouter', 'ollama', or 'litellm'.
     model_name: e.g. 'llama-3.1-8b-instant' (groq), 'google/gemini-2.0-flash-001' (openrouter), or 'llama3.3:70b' (ollama).
     api_key: optional — omit to keep using the environment variable (GROQ_API_KEY / OLLAMA_API_KEY).
     For openrouter and ollama, an API key is required (set via this tool or the respective env var)."""
@@ -1346,8 +1349,8 @@ def change_llm_model(model_name: str, provider: str = "groq", temperature: float
         email = "unknown"
 
     provider = provider.lower().strip()
-    if provider not in ("groq", "openrouter", "ollama"):
-        return f"Invalid provider '{provider}'. Must be 'groq', 'openrouter', or 'ollama'."
+    if provider not in ("groq", "openrouter", "ollama", "litellm"):
+        return f"Invalid provider '{provider}'. Must be 'groq', 'openrouter', 'ollama', or 'litellm'."
 
     if provider == "groq" and model_name not in GROQ_MODELS:
         valid = ", ".join(sorted(GROQ_MODELS))
@@ -1390,7 +1393,7 @@ def change_llm_model(model_name: str, provider: str = "groq", temperature: float
 def configure_fallback_llm(model_name: str, provider: str = "ollama", api_key: str = "") -> str:
     """Configure a fallback LLM used automatically when the primary hits rate limits or errors.
     model_name: e.g. 'llama3.3:70b' (ollama), 'llama-3.1-8b-instant' (groq), or 'google/gemini-flash-1.5' (openrouter).
-    provider: 'ollama', 'groq', or 'openrouter'. api_key: optional, leave empty to use env var (OLLAMA_API_KEY).
+    provider: 'ollama', 'groq', 'openrouter', or 'litellm'. api_key: optional, leave empty to use env var (OLLAMA_API_KEY).
     To disable the fallback, call with model_name='none'."""
     from auth import current_user_email
     try:
@@ -1407,8 +1410,8 @@ def configure_fallback_llm(model_name: str, provider: str = "ollama", api_key: s
         return "Fallback LLM disabled."
 
     provider = provider.lower().strip()
-    if provider not in ("groq", "openrouter", "ollama"):
-        return f"Invalid provider '{provider}'. Must be 'groq', 'openrouter', or 'ollama'."
+    if provider not in ("groq", "openrouter", "ollama", "litellm"):
+        return f"Invalid provider '{provider}'. Must be 'groq', 'openrouter', 'ollama', or 'litellm'."
 
     if provider == "groq" and model_name not in GROQ_MODELS:
         valid = ", ".join(sorted(GROQ_MODELS))

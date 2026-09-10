@@ -1,0 +1,36 @@
+# Non-secret app configuration for a participant namespace on the Spark cluster.
+# The credential half lives in two Secrets (see deployment.yaml envFrom):
+#   agenticaiu<N>-llm  — LiteLLM gateway key + base URL, injected by the lab platform
+#   frontdeskai-secret — SECRET_KEY / AUTH_PASSWORD, created by deploy-spark.sh
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontdeskai-config
+  labels:
+    app: frontdeskai
+data:
+  # LiteLLM is an OpenAI-compatible gateway; agents.py reads the base URL and
+  # key from LITELLM_*/OPENAI_* in the platform Secret.
+  LLM_PROVIDER: "litellm"
+  LLM_MODEL: "qwen36-35b-a3b-lab"
+  # No second vendor to fall back to here. An empty model disables the fallback
+  # rather than leaving it pointed at Groq, which has no key in this namespace.
+  LLM_FALLBACK_PROVIDER: ""
+  LLM_FALLBACK_MODEL: ""
+
+  # Pre-populate demo employees, leave, tickets, expenses, rooms, payslips.
+  SEED_DEMO_DATA: "true"
+
+  # Observability. Prometheus metrics are served on /metrics either way; there
+  # is no Tempo on this cluster, so an empty endpoint skips the OTLP exporter
+  # instead of dropping every span silently.
+  OTEL_SERVICE_NAME: "frontdeskai"
+  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  LOG_LEVEL: "INFO"
+
+  # Writable home on the PVC — ONNX embedding model cache for ChromaDB.
+  HOME: "/shared"
+  SQLITE_DIR: "/shared/.sqlite"
+
+  # Fails closed if SECRET_KEY is missing rather than minting a throwaway one.
+  ENV: "production"

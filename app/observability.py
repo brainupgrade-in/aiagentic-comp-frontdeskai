@@ -92,11 +92,14 @@ def init_observability():
     service_name = os.environ.get("OTEL_SERVICE_NAME", "frontdeskai")
     resource = Resource.create({"service.name": service_name})
 
-    # Tracing with OTLP export to Tempo
+    # Tracing. Spans are still recorded locally when no collector is set; an
+    # empty OTEL_EXPORTER_OTLP_ENDPOINT skips the exporter rather than retrying
+    # against a host that is not there, which BatchSpanProcessor does silently.
     provider = TracerProvider(resource=resource)
     otlp_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://tempo.monitoring.svc.cluster.local:4317")
-    otlp_exporter = OTLPSpanExporter(endpoint=otlp_endpoint, insecure=True)
-    provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
+    if otlp_endpoint:
+        otlp_exporter = OTLPSpanExporter(endpoint=otlp_endpoint, insecure=True)
+        provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
     trace.set_tracer_provider(provider)
     _tracer = trace.get_tracer("frontdeskai")
 

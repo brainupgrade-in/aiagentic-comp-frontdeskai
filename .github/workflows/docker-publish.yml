@@ -41,6 +41,7 @@ jobs:
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/frontdeskai:${{ github.sha }}
             ${{ secrets.DOCKERHUB_USERNAME }}/frontdeskai:${{ steps.tags.outputs.sha_short }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/frontdeskai:latest
           # Without this the pip layer is cold every run and re-downloads
           # chromadb/onnxruntime/oci.
           cache-from: type=gha
@@ -54,7 +55,7 @@ jobs:
             echo "| | |"
             echo "|---|---|"
             echo "| Repository | \`<DOCKERHUB_USERNAME>/frontdeskai\` |"
-            echo "| Tags | \`${{ github.sha }}\`, \`${{ steps.tags.outputs.sha_short }}\` |"
+            echo "| Tags | \`${{ github.sha }}\`, \`${{ steps.tags.outputs.sha_short }}\`, \`latest\` |"
             echo "| Digest | \`${{ steps.build.outputs.digest }}\` |"
             echo "| Ref | \`${{ github.ref_name }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"

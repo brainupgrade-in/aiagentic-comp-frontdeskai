@@ -1,0 +1,97 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontdeskai
+  labels:
+    app: frontdeskai
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate. The namespace ResourceQuota grants exactly
+  # 1Gi of limits.memory, which one pod uses in full, so a rolling surge to a
+  # second pod is quota-denied and the rollout hangs.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: frontdeskai
+  template:
+    metadata:
+      labels:
+        app: frontdeskai
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: frontdeskai
+          # Replaced by deploy-spark.sh with the Docker Hub tag being deployed.
+          image: DOCKERHUB_USERNAME/frontdeskai:latest
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          envFrom:
+            # Non-secret app config: provider, model, seeding, observability.
+            - configMapRef:
+                name: frontdeskai-config
+            # Per-participant LiteLLM gateway key and base URL. Created by the
+            # lab platform, not by this app — each participant's own key, with
+            # its own daily cap. Optional so the app still starts if absent.
+            - secretRef:
+                name: LLM_SECRET_NAME
+                optional: true
+            # SECRET_KEY / AUTH_PASSWORD, created by deploy-spark.sh.
+            - secretRef:
+                name: frontdeskai-secret
+          ports:
+            - containerPort: 8000
+              name: http
+          volumeMounts:
+            - name: sqlite-data
+              mountPath: /shared
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+            limits:
+              # The whole limits.memory quota. ChromaDB plus the ONNX embedding
+              # model is the bulk of it.
+              memory: "1Gi"
+              cpu: "500m"
+      volumes:
+        - name: sqlite-data
+          persistentVolumeClaim:
+            claimName: frontdeskai-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: frontdeskai-pvc
+  labels:
+    app: frontdeskai
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
