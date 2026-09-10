@@ -13,8 +13,14 @@ jobs:
       - name: Check out the ref being built
         uses: actions/checkout@v4
 
+      # The Spark cluster nodes are arm64 (DGX Spark) and the GitHub runner is
+      # amd64, so the arm64 leg is built under QEMU emulation.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       # buildx is what honours the --mount=type=cache in the Containerfile,
-      # and what gives us the GitHub Actions cache backend below.
+      # what builds more than one platform, and what gives us the GitHub
+      # Actions cache backend below.
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -38,6 +44,9 @@ jobs:
           context: .
           file: ./Containerfile
           push: true
+          # arm64 is what the Spark cluster runs; amd64 keeps the image usable
+          # on a laptop and in Codespaces.
+          platforms: linux/amd64,linux/arm64
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/frontdeskai:${{ github.sha }}
             ${{ secrets.DOCKERHUB_USERNAME }}/frontdeskai:${{ steps.tags.outputs.sha_short }}
