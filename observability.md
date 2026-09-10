@@ -307,6 +307,29 @@ Without `insecure=True`, the exporter attempts TLS and fails silently — traces
 - On graceful shutdown, `TracerProvider.shutdown()` flushes remaining spans — but container kill signals may not allow enough time
 - For debugging, set `OTEL_BSP_SCHEDULE_DELAY=1000` to flush every second
 
+## Where this actually runs
+
+⚠️ **`scripts/install-observability.sh` is for a local kind cluster** — its own header
+says so, and it refuses politely if the current context does not look like kind. Do not
+run it against the workshop cluster.
+
+On the **workshop cluster** the same stack exists, deployed separately into the
+`monitoring` namespace and shared by all participants:
+
+| | endpoint | notes |
+|---|---|---|
+| Tempo | `tempo.monitoring.svc:4317` (OTLP gRPC) | `OTEL_SERVICE_NAME` carries the namespace, so your traces are findable |
+| Loki | `loki.monitoring.svc:3100` | Promtail DaemonSet tails every pod; **since 2026-09-11** |
+| Prometheus | scraped by the platform | the `frontdeskai-participants` job, matching pod label `app=frontdeskai` |
+| Grafana | datasources `loki`, `tempo`, `prometheus-nuc` | log lines carry a **View trace** link into Tempo |
+
+In Grafana's Explore, `{namespace="<your namespace>", app="frontdeskai"}` is your app's
+logs; add `agent=~".+"` for just the LLM-call lines, which are labelled per agent.
+
+⚠️ **`trace_id` is not a Loki label there, on purpose** — one label value per trace
+would blow up the index. The jump to Tempo is a derived field on the datasource, which
+regexes it out of the line at query time. Log → trace works; `{trace_id="..."}` does not.
+
 ## Grafana Dashboards
 
 Two dashboards read these metrics.
