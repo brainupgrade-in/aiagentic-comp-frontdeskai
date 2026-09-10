@@ -446,7 +446,7 @@ def _add_fewshot_example(conn, msg_row, user: str) -> None:
     conn.commit()
 
     # Insert into ChromaDB
-    fewshot_add(example_id, question, answer, category, confidence)
+    fewshot_add(example_id, question, answer, category, confidence, user)
 
 
 def _remove_fewshot_example(conn, message_id: int) -> None:

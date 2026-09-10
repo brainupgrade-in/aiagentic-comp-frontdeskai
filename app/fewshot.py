@@ -43,7 +43,8 @@ def _get_collection():
     return _fewshot_collection
 
 
-def add_example(example_id: str, question: str, answer: str, category: str, confidence: int) -> None:
+def add_example(example_id: str, question: str, answer: str, category: str,
+                confidence: int, email: str) -> None:
     """Upsert a successful Q&A pair into the few-shot collection."""
     collection = _get_collection()
     collection.upsert(
@@ -53,6 +54,7 @@ def add_example(example_id: str, question: str, answer: str, category: str, conf
             "answer": answer[:1000],  # cap stored answer length
             "category": category,
             "confidence": confidence,
+            "email": email,  # who produced it -- required in order to retrieve it
         }],
     )
 
@@ -66,7 +68,7 @@ def remove_example(example_id: str) -> None:
         pass  # ignore if not found
 
 
-def retrieve_examples(query: str, category: str, top_k: int = 2) -> list[dict]:
+def retrieve_examples(query: str, category: str, email: str, top_k: int = 2) -> list[dict]:
     """Retrieve the most similar successful Q&A examples for a given category.
 
     Returns list of dicts with keys: question, answer, score.
@@ -79,7 +81,9 @@ def retrieve_examples(query: str, category: str, top_k: int = 2) -> list[dict]:
     results = collection.query(
         query_texts=[query],
         n_results=top_k,
-        where={"category": category},
+        # Scoped to the employee asking. Examples stored before this fix carry no
+        # "email" and match nothing here, so an unowned example is served to nobody.
+        where={"$and": [{"category": category}, {"email": email}]},
         include=["documents", "metadatas", "distances"],
     )
 

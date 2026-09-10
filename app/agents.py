@@ -481,9 +481,20 @@ def fewshot_retrieval(state: SupportRequest) -> dict:
     if not category or category == "general":
         return {"fewshot_context": "", "audit": [f"[{ts}] Few-shot: skipped (category={category})"]}
     try:
+        # Identity comes from the ContextVar app.py sets after JWT verification --
+        # the same channel the tools use, and one the LLM cannot influence.
+        from auth import current_user_email
+        try:
+            email = current_user_email.get()
+        except LookupError:
+            email = ""
+        if not email:
+            return {"fewshot_context": "",
+                    "audit": [f"[{ts}] Few-shot: skipped (no identity in context)"]}
         examples = retrieve_examples(
             query=state["request"],
             category=category,
+            email=email,
             top_k=2,
         )
         context = format_fewshot_context(examples)
