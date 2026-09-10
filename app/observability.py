@@ -12,6 +12,10 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.view import (
+    ExplicitBucketHistogramAggregation,
+    View,
+)
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.trace import StatusCode
@@ -23,6 +27,32 @@ try:
 except ImportError:
     LangfuseCallbackHandler = None  # type: ignore[assignment,misc]
     _langfuse_available = False
+
+
+# ── Latency histogram buckets ───────────────────────────────────────
+
+# Both latency histograms record SECONDS. Without an explicit aggregation
+# OpenTelemetry applies its default boundaries -- 0, 5, 10, 25 ... 10000 --
+# which are chosen for MILLISECONDS, so every real observation lands in the
+# first bucket and histogram_quantile can only interpolate inside it: p50, p95
+# and p99 then return roughly the same fabricated number. Measured before this
+# fix on the lab gateway: supervisor, 12 calls totalling 18.82s, all 12 in
+# le=5.0.
+#
+# Boundaries below cover the measured envelope -- per-agent calls 0.9-3.3s,
+# end-to-end requests 13-57s -- with resolution across both.
+_LATENCY_BUCKETS = [0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0, 55.0]
+
+_LATENCY_VIEWS = [
+    View(
+        instrument_name=name,
+        aggregation=ExplicitBucketHistogramAggregation(_LATENCY_BUCKETS),
+    )
+    for name in (
+        "frontdeskai_llm_call_duration_seconds",
+        "frontdeskai_request_duration_seconds",
+    )
+]
 
 
 # ── JSON Log Formatter ──────────────────────────────────────────────
@@ -105,7 +135,9 @@ def init_observability():
 
     # Metrics with Prometheus exporter
     reader = PrometheusMetricReader()
-    meter_provider = MeterProvider(resource=resource, metric_readers=[reader])
+    meter_provider = MeterProvider(
+        resource=resource, metric_readers=[reader], views=_LATENCY_VIEWS
+    )
     metrics.set_meter_provider(meter_provider)
     _meter = metrics.get_meter("frontdeskai")
 

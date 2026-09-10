@@ -69,19 +69,19 @@ iteration it had.
 
 ### PromQL Examples
 
-> ⚠️ **The two `histogram_quantile` examples below do not currently return real numbers.** Both
-> histograms are created with `unit="s"` and no explicit bucket boundaries, so OpenTelemetry applies
-> its default *millisecond* boundaries (`0, 5, 10, 25 … 10000`) to values recorded in seconds.
-> Measured on a live pod: `supervisor` had 12 calls totalling 18.8s and **all 12 fell in `le=5.0`**.
-> `histogram_quantile` can only interpolate inside that one bucket, so p50, p95 and p99 all return
-> roughly the same fabricated value. Use `_sum / _count` means until this is fixed — see
-> `todo/histogram_bucket_units.md`.
+> ⚠️ **These require an image built after the bucket fix (2026-09-11).** Both histograms record
+> seconds; until that fix they carried no explicit boundaries, so OpenTelemetry applied its default
+> *millisecond* boundaries (`0, 5, 10, 25 … 10000`) and every observation landed in one bucket —
+> measured on a live pod, `supervisor` had 12 calls totalling 18.8s with **all 12 in `le=5.0`**, so
+> p50, p95 and p99 all returned the same fabricated value. `_LATENCY_BUCKETS` in
+> `app/observability.py` now sets second-scale boundaries via a `View`. **A pod running an older
+> image still reports the old buckets**, so redeploy before trusting a percentile.
 
 ```promql
-# p95 request latency  -- NOT VALID until the bucket boundaries are fixed
+# p95 request latency
 histogram_quantile(0.95, sum(rate(frontdeskai_request_duration_seconds_bucket[5m])) by (le))
 
-# LLM call duration by agent (p95)  -- likewise
+# LLM call duration by agent (p95)
 histogram_quantile(0.95, sum(rate(frontdeskai_llm_call_duration_seconds_bucket[5m])) by (le, agent))
 
 # mean seconds per call by agent -- correct today, and what the workshop dashboard uses
@@ -160,10 +160,9 @@ All observability configuration is externalized via environment variables set in
 
 ### Kubernetes Pod Annotations
 
-⚠️ **There are two manifest sets and only one of them carries these annotations.**
-`scripts/manifests/deployment.yaml` has them; `scripts/manifests/spark/deployment.yaml` — the set
-`deploy-spark.sh` applies, and therefore the one every workshop participant actually deploys — does
-**not**. Verified 2026-09-11 against a live pod: `.spec.template.metadata.annotations` is empty.
+**Both** manifest sets carry these annotations — `scripts/manifests/deployment.yaml` and
+`scripts/manifests/spark/deployment.yaml`, the latter being what `deploy-spark.sh` applies. The
+`sed` pipeline in that script passes them through untouched; verified by rendering it.
 
 ```yaml
 spec:
@@ -175,13 +174,16 @@ spec:
         prometheus.io/path: "/metrics"
 ```
 
-An annotation-discovery Prometheus (such as the one `install-observability.sh` brings up) will not
-find the app on the spark path until those three lines are added there too.
+⚠️ **A pod deployed before those lines existed keeps the old template.** A live pod was found on
+2026-09-11 with no annotations at all, because it had been deployed minutes before the spark
+manifest gained them. `kubectl apply` fixes it on the next `deploy-spark.sh`, but until then the
+running object and the manifest disagree — check the pod, not the file, when discovery misses an app.
 
-The **workshop platform** does not depend on them. Its `frontdeskai-participants` scrape job matches
-on the pod **label** `app=frontdeskai` within an `agenticaiu<N>` namespace, precisely so that a
-participant has nothing to configure. It also relabels the namespace onto a `namespace` label, which
-is what the *FrontDesk AI — Agent Performance* dashboard filters on.
+The **workshop platform** does not depend on these annotations either way. Its
+`frontdeskai-participants` scrape job matches on the pod **label** `app=frontdeskai` within an
+`agenticaiu<N>` namespace, which is one fewer thing that has to be right in what a participant
+deploys. It also relabels the namespace onto a `namespace` label, which is what the *FrontDesk AI —
+Agent Performance* dashboard filters on.
 
 ## Code Structure
 
@@ -311,13 +313,13 @@ Two dashboards read these metrics.
 
 **"FrontDesk AI — Agent Performance"** (uid `frontdeskai-agent-performance`) is the workshop one:
 per-agent evaluation and tuning, filterable by participant namespace. Its JSON lives in the course
-repo under `resources/`, not here. It deliberately shows **means, not percentiles**, for the bucket
-reason above — where the time goes, where the tokens go, how many ReAct iterations each worker
-burned, and a per-agent scorecard.
+repo under `resources/`, not here — where the time goes, where the tokens go, how many ReAct
+iterations each worker burned, and a per-agent scorecard. It leads with **means**, which are always
+correct, and shows percentiles alongside them.
 
-⚠️ **`resources/frontdeskai-dashboard.json` in this repo plots "Response Latency (P50 / P95 / P99)"
-on the broken buckets.** Those three lines are not measurements. Fix them, or drop the panel, when
-`todo/histogram_bucket_units.md` is done.
+⚠️ `resources/frontdeskai-dashboard.json` in this repo plots "Response Latency (P50 / P95 / P99)".
+Those panels were meaningless before the bucket fix and are correct after it — but only against a
+pod running an image built from 2026-09-11 or later.
 
 A dedicated dashboard **"Agentic AI Observability"** is also available in Grafana (`aiagentic-comp` folder).
 
