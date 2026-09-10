@@ -414,7 +414,9 @@ def supervisor(state: SupportRequest, config: RunnableConfig = None) -> dict:
         )
         with trace_llm_call("supervisor") as ctx:
             try:
-                result = get_llm_chain(Classification).with_config(callbacks=callbacks).invoke(prompt)
+                result = get_llm_chain(Classification).with_config(
+                    callbacks=[*callbacks, ctx["token_handler"]]
+                ).invoke(prompt)
             except Exception as parse_err:
                 # Model returned plain text instead of JSON — try regex extraction
                 raw = getattr(parse_err, "llm_output", "") or str(parse_err)
@@ -833,7 +835,9 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
             # === Final structured response (with full tool context in messages) ===
             with trace_llm_call(f"{name}_worker_final") as ctx:
                 try:
-                    result = get_llm_chain(WorkerResponse).with_config(callbacks=callbacks).invoke(messages)
+                    result = get_llm_chain(WorkerResponse).with_config(
+                        callbacks=[*callbacks, ctx["token_handler"]]
+                    ).invoke(messages)
                 except Exception as parse_err:
                     # Model returned plain text instead of JSON — use it directly as the response
                     raw = getattr(parse_err, "llm_output", "") or ""

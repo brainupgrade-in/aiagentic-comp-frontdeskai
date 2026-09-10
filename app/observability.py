@@ -200,11 +200,59 @@ def get_tracer():
     return _tracer or trace.get_tracer("frontdeskai")
 
 
+class TokenCaptureHandler:
+    """Capture token usage from a chain whose output is a parsed object.
+
+    `with_structured_output()` returns the Pydantic model, not the AIMessage, so
+    `response_metadata` -- where trace_llm_call normally reads token counts -- is
+    gone by the time the call site sees the result. That silently attributed ZERO
+    tokens to the supervisor and to every worker's final answer: two of the five
+    workflow legs, invisible in cost reporting while their latency looked fine.
+
+    A callback sees the raw LLMResult before parsing, so it works for structured
+    and unstructured calls alike. Deliberately not a BaseCallbackHandler subclass:
+    LangChain duck-types handlers, and this keeps observability.py free of a
+    langchain import.
+    """
+
+    raise_error = False
+    run_inline = False
+    ignore_llm = False
+    ignore_chain = True
+    ignore_agent = True
+    ignore_retriever = True
+    ignore_chat_model = False
+    ignore_retry = True
+    ignore_custom_event = True
+
+    def __init__(self):
+        self.total_tokens = 0
+
+    def on_llm_end(self, response, **kwargs):
+        # Provider-level usage, which is where an OpenAI-compatible gateway puts it.
+        usage = (getattr(response, "llm_output", None) or {}).get("token_usage") or {}
+        total = usage.get("total_tokens") or 0
+        if not total:
+            # Per-generation usage_metadata, the newer LangChain shape.
+            for gen_list in getattr(response, "generations", []) or []:
+                for gen in gen_list:
+                    msg = getattr(gen, "message", None)
+                    um = getattr(msg, "usage_metadata", None) or {}
+                    total += um.get("total_tokens") or 0
+        self.total_tokens += total
+
+    def __getattr__(self, name):
+        # Every other on_* callback LangChain may probe for.
+        if name.startswith("on_"):
+            return lambda *a, **kw: None
+        raise AttributeError(name)
+
+
 @contextmanager
 def trace_llm_call(agent_name: str):
     """Context manager: creates a span, measures duration, yields a dict for token capture."""
     tracer = get_tracer()
-    ctx = {"response": None}
+    ctx = {"response": None, "token_handler": TokenCaptureHandler()}
     with tracer.start_as_current_span(f"llm.{agent_name}") as span:
         span.set_attribute("agent.name", agent_name)
         start = time.monotonic()
@@ -219,13 +267,18 @@ def trace_llm_call(agent_name: str):
 
             # Extract token usage from response metadata
             resp = ctx.get("response")
-            if resp and hasattr(resp, "response_metadata"):
+            total_tokens = 0
+            if resp is not None and hasattr(resp, "response_metadata"):
                 meta = resp.response_metadata or {}
                 usage = meta.get("token_usage") or meta.get("usage") or {}
-                total_tokens = usage.get("total_tokens", 0)
-                if total_tokens and llm_tokens_total:
-                    llm_tokens_total.add(total_tokens, {"agent": agent_name})
-                    span.set_attribute("llm.tokens", total_tokens)
+                total_tokens = usage.get("total_tokens", 0) or 0
+            if not total_tokens:
+                # Structured-output chains hand back a parsed object with no
+                # metadata; the callback saw the raw LLMResult on the way past.
+                total_tokens = ctx["token_handler"].total_tokens
+            if total_tokens and llm_tokens_total:
+                llm_tokens_total.add(total_tokens, {"agent": agent_name})
+                span.set_attribute("llm.tokens", total_tokens)
 
             logger.info(
                 "LLM call completed",
