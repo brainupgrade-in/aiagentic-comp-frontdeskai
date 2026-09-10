@@ -1,0 +1,60 @@
+# Build the FrontDesk AI image and push it to Docker Hub.
+# Manual only: Actions tab -> "Build and push Docker image" -> Run workflow.
+# Secrets required: DOCKERHUB_USERNAME, DOCKERHUB_PASSWORD (use an access token).
+name: Build and push Docker image
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the ref being built
+        uses: actions/checkout@v4
+
+      # buildx is what honours the --mount=type=cache in the Containerfile,
+      # and what gives us the GitHub Actions cache backend below.
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+      # The username is a secret, so an image name built from it is masked in the
+      # log. Resolve the tags once here and reuse them.
+      - name: Resolve image tags
+        id: tags
+        run: |
+          echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Containerfile
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/frontdeskai:${{ github.sha }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/frontdeskai:${{ steps.tags.outputs.sha_short }}
+          # Without this the pip layer is cold every run and re-downloads
+          # chromadb/onnxruntime/oci.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          {
+            echo "### Pushed to Docker Hub"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Repository | \`<DOCKERHUB_USERNAME>/frontdeskai\` |"
+            echo "| Tags | \`${{ github.sha }}\`, \`${{ steps.tags.outputs.sha_short }}\` |"
+            echo "| Digest | \`${{ steps.build.outputs.digest }}\` |"
+            echo "| Ref | \`${{ github.ref_name }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
