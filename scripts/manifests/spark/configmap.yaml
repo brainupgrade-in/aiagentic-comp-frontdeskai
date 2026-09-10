@@ -28,8 +28,10 @@ data:
   OTEL_EXPORTER_OTLP_ENDPOINT: ""
   LOG_LEVEL: "INFO"
 
-  # Writable home on the PVC — ONNX embedding model cache for ChromaDB.
-  HOME: "/shared"
+  # HOME is deliberately NOT set here. The image points it at /opt/appcache,
+  # where the ChromaDB ONNX embedding model is baked in; overriding it sends
+  # chromadb looking for a model it would then try to download, and this
+  # namespace has no internet egress.
   SQLITE_DIR: "/shared/.sqlite"
 
   # Fails closed if SECRET_KEY is missing rather than minting a throwaway one.
