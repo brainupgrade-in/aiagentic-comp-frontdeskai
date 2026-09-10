@@ -248,6 +248,28 @@ class TokenCaptureHandler:
         raise AttributeError(name)
 
 
+def with_token_handler(callbacks, ctx):
+    """Return a `callbacks` value that also carries this call's token handler.
+
+    LangChain passes `config["callbacks"]` through as EITHER a plain list OR a
+    CallbackManager, depending on whether the call is nested inside another
+    runnable. Unpacking a CallbackManager with * raises
+    `TypeError: Value after * must be an iterable` -- and because the agents catch
+    the failure and fall through to a default classification, the app keeps
+    answering in ~100ms with category="general" and nothing looks broken.
+    """
+    handler = ctx["token_handler"]
+    if callbacks is None:
+        return [handler]
+    if hasattr(callbacks, "add_handler"):        # a CallbackManager
+        # copy() first: the manager belongs to the caller's run, and adding to it
+        # in place would accumulate a handler per call if it is ever reused.
+        mgr = callbacks.copy() if hasattr(callbacks, "copy") else callbacks
+        mgr.add_handler(handler, inherit=True)
+        return mgr
+    return [*callbacks, handler]                 # a plain list
+
+
 @contextmanager
 def trace_llm_call(agent_name: str):
     """Context manager: creates a span, measures duration, yields a dict for token capture."""

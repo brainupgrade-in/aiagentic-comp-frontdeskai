@@ -19,7 +19,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, START, END
 from pydantic import BaseModel, Field, SecretStr
 
-from observability import trace_llm_call
+from observability import trace_llm_call, with_token_handler
 from rag import retrieve, format_context, format_sources
 from fewshot import retrieve_examples, format_fewshot_context
 from tools import DOMAIN_TOOLS, MANAGER_TOOLS
@@ -415,7 +415,7 @@ def supervisor(state: SupportRequest, config: RunnableConfig = None) -> dict:
         with trace_llm_call("supervisor") as ctx:
             try:
                 result = get_llm_chain(Classification).with_config(
-                    callbacks=[*callbacks, ctx["token_handler"]]
+                    callbacks=with_token_handler(callbacks, ctx)
                 ).invoke(prompt)
             except Exception as parse_err:
                 # Model returned plain text instead of JSON — try regex extraction
@@ -836,7 +836,7 @@ def make_domain_worker(name: str, system_prompt: str, can_escalate: bool):
             with trace_llm_call(f"{name}_worker_final") as ctx:
                 try:
                     result = get_llm_chain(WorkerResponse).with_config(
-                        callbacks=[*callbacks, ctx["token_handler"]]
+                        callbacks=with_token_handler(callbacks, ctx)
                     ).invoke(messages)
                 except Exception as parse_err:
                     # Model returned plain text instead of JSON — use it directly as the response
