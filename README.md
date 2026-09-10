@@ -5,7 +5,7 @@ capability in plain English; the system researches APIs, writes Python, validate
 disk, stores its config encrypted, and exposes it to domain workers — all at runtime, no rebuild.
 Skills, LLM provider, and SMTP settings survive restarts.
 
-**Stack:** FastAPI · LangGraph · Ollama Cloud / Groq / OpenRouter · SQLite · ChromaDB · OpenTelemetry
+**Stack:** FastAPI · LangGraph · Ollama Cloud / Groq / OpenRouter / any OpenAI-compatible gateway · SQLite · ChromaDB · OpenTelemetry
 
 ## Documentation
 
@@ -29,6 +29,16 @@ bash scripts/quickstart.sh    # cluster if needed → app → MCP → health che
 ```
 
 That is the whole setup. `quickstart.sh` is idempotent, so re-run it any time.
+
+**On a Kubernetes cluster where the platform provides the LLM** (a workshop sandbox with
+`APP_NAMESPACE` and `APP_HOST` already exported), there is no `.env` and no vendor key to set:
+
+```bash
+bash scripts/deploy-spark.sh   # no arguments — reads your namespace and host from the environment
+```
+
+It pulls the published `brainupgrade/frontdeskai` image (amd64 + arm64) and wires the app to the
+in-cluster gateway. See `CLAUDE.md` for the constraints that path is built around.
 
 In a **Codespace** you can skip even that: save `OLLAMA_API_KEY` as a Codespaces secret before you create
 the codespace, and the devcontainer deploys everything for you — wait for the `FrontDesk AI is ready`
