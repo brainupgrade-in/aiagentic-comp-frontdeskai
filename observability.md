@@ -19,6 +19,23 @@ FrontDesk AI (FastAPI)
                     Correlated via trace_id + span_id
 ```
 
+**Live on the workshop cluster since 2026-09-11.** All three legs are deployed in
+namespace `monitoring`, and the trace ↔ log jump works in **both** directions:
+
+| Direction | Mechanism | Where it is configured |
+|---|---|---|
+| log line → trace | Loki `derivedFields`, a regex over the line | Grafana datasource `loki` |
+| span → log lines | Tempo `tracesToLogsV2`, a line-filter query | Grafana datasource `tempo` |
+
+⚠️ **Neither indexes `trace_id`, deliberately.** It stays inside the JSON line; only
+`level`, `logger` and `agent` are promoted to Loki labels by Promtail's pipeline. One
+label value per request is the textbook way to blow up a Loki index.
+
+⚠️ **A `${...}` in a Grafana *provisioning* file is expanded as an environment
+variable** before the datasource is created, so `url: '${__value.raw}'` silently stored
+an empty link target and the **View trace** button went nowhere — with no error
+anywhere. Escape it: `'$${__value.raw}'`. Same for `'$${__span.traceId}'`.
+
 ## Span Hierarchy
 
 Each chat request creates a parent span with child spans for each LLM agent call:
