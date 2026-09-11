@@ -80,9 +80,10 @@ dashboard panel reading them needs `or vector(0)`, or it shows "No data" on a he
 
 ⚠️ **The `agent` label encodes the trajectory, not just the agent.** A worker's ReAct loop emits
 `<worker>_react_iter_<n>` per think-act-observe round, `<worker>_react_iter_<n>_fb` when the tool
-call raised, and `<worker>_worker_final` for the answer. It is bounded by `MAX_TOOL_ITERATIONS`
-(3), so cardinality is finite — and a series tagged `_react_iter_2` means that worker used the last
-iteration it had.
+call raised, and `<worker>_worker_final` for the answer. It is bounded per worker — the domain
+workers get `MAX_TOOL_ITERATIONS` (3), `skill_admin` gets `SKILL_ADMIN_TOOL_ITERATIONS` (6, because
+it researches with `search_web`/`fetch_webpage` before it calls `install_skill`) — so cardinality is
+finite, and a series tagged with that worker's last index means it used every iteration it had.
 
 ### PromQL Examples
 

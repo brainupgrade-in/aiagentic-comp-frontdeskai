@@ -499,6 +499,15 @@ This is the centrepiece. The system does not have a weather capability. Ask it t
 Install a skill to look up the current weather for a city
 ```
 
+> **If it answers "network connectivity issues", two things to check, in this order.**
+> The namespace must allow outbound 443/80 — a participant namespace (`agenticaiu<N>`) was an
+> allowlist with no internet until 2026-09-11, and kube-router *rejects*, so the tools got an
+> instant `[Errno 111] Connection refused`. Second: **start a new chat**. Prior turns are replayed
+> to the worker, so one failed attempt in the transcript teaches it to fail again — the same
+> request on a clean thread succeeds. This step also needs `skill_admin`'s larger tool budget
+> (`SKILL_ADMIN_TOOL_ITERATIONS`); with the default 3 the agent spends every round researching and
+> never reaches `install_skill`.
+
 **Watch the audit trail as it runs.** In one turn the agent:
 
 1. **Researches** — `search_web` then `fetch_webpage` to find and read a weather API's docs
@@ -665,6 +674,186 @@ Details: [observability.md](observability.md) and [langfuse-setup.md](langfuse-s
 
 ---
 
+## Part 11 — Human in the Loop: Where the Agent Stops and Waits
+
+Every part so far is the agent *doing* something. This one is about the places where it must not, and
+what it does instead. There are three distinct shapes of human-in-the-loop in this app, and they are
+easy to confuse:
+
+| Shape | Where | What the human supplies |
+|---|---|---|
+| **Ask before acting** | the clarify node (Part 1) | the missing information |
+| **Stop and hand over** | expense approval, leave over 3 days | the *decision* |
+| **Curate afterwards** | 👍/👎 (Part 3), Knowledge Base (Part 2) | the judgement about what was good |
+
+The middle one is the interesting one, because it is the only place where the agent has a tool that
+would finish the job and is refused the use of it.
+
+```mermaid
+flowchart TD
+    A[Rajesh: please claim this expense] --> B[Finance worker]
+    B --> C[submit_expense_claim]
+    C --> D[(status = submitted<br/>reviewed_by = NULL)]
+    D --> E{Who is asking to decide it?}
+    E -->|the claimant| F[Refused: nobody decides their own]
+    E -->|no authority| G[Refused: not manager, not finance approver]
+    E -->|manager or senior finance| H[approve_expense_claim]
+    H --> I[(status = approved<br/>reviewed_by = arjun.nayak)]
+    F --> J[Claim stays pending — a human is still required]
+    G --> J
+```
+
+### Step 1 — the agent works up to the boundary, then stops
+
+As `rajesh.kumar@unigps.in`:
+
+```
+I spent INR 7,800 on a client visit to Hyderabad last week - flight tickets. Please claim it.
+```
+
+**What to observe:** a claim id comes back with status `submitted (pending finance review)`. Ids are
+sequential from the five seeded claims, so yours depends on how many you have raised already — the steps
+below say `EXP-2026-0008`; **substitute the id you were actually given.**
+
+Now note what is *not* in the audit trail: the finance worker holds `approve_expense_claim` in the very
+same tool list it just used to call `submit_expense_claim`. It had the means to finish the job in one
+turn and did not. Nothing in the prompt asked it to hold back — the
+boundary is in the tool, which resolves the approver from the session and checks authority in the
+`employees` table before it writes.
+
+### Step 2 — the claimant cannot approve their own claim
+
+Stay logged in as Rajesh and ask for the claim he just raised:
+
+```
+Approve expense claim EXP-2026-0008
+```
+
+**What to observe:** refused, and read the audit trail rather than the sentence. The trail shows the
+tool *was* called —
+`Finance ReAct: 2 iteration(s), tools: approve_expense_claim({'claim_id': 'EXP-2026-0008', 'status': 'approved'})`
+— and returned `You cannot approve or reject your own expense claim.` The model then relays that
+refusal. The guardrail is not the model declining; it is the model trying and the tool saying no.
+
+⚠️ **Read the trail, not the prose.** The reply also offers to route you through "the HR portal" and
+promises reimbursement "within 7–10 working days". There is no HR portal in this system. The refusal is
+real and the embroidery around it is not — which is exactly why every scenario in this document tells
+you to open the audit trail and, where it matters, to check the database.
+
+### Step 3 — neither can an unrelated human
+
+Log out, log in as `priya.sharma@unigps.in` (HR Manager) and send the same message. Then try
+`vikram.singh@unigps.in` (Finance Analyst). Both are refused with *"Only the claimant's manager or a
+senior finance approver can approve or reject it."*
+
+| Who tries | Result | Why |
+|---|---|---|
+| `rajesh.kumar` (the claimant) | refused | nobody decides their own claim |
+| `vikram.singh` (Finance **Analyst**) | refused | finance department, but not a senior designation |
+| `priya.sharma` (HR Manager) | refused | a manager, but not *Rajesh's* manager |
+| `arjun.nayak` (Rajesh's manager) | **approved** | `employees.manager_id` says so |
+| `amit.patel` (Finance **Lead**) | **approved** | senior finance designation |
+
+Seniority is matched on the designation text — lead, manager, director, head, VP, chief — so Vikram's
+department alone buys him nothing. Being *a* manager is not enough either; Priya has to be the
+claimant's manager.
+
+### Step 4 — the human with authority decides, in the same chat box
+
+Log in as `arjun.nayak@unigps.in` — Rajesh's manager — and send:
+
+```
+Approve expense claim EXP-2026-0008
+```
+
+**What to observe:** `Expense claim EXP-2026-0008 has been approved by arjun.nayak.` The human did not
+open an admin screen, a workflow tool, or a queue. They typed a sentence into the same box the employee
+used, and the agent executed a decision it was not allowed to make on its own. That is the whole
+pattern: the agent carries the work up to the decision, a human makes the decision, the agent carries
+it out and records who made it.
+
+### Step 5 — and the decision is final
+
+As `amit.patel@unigps.in`, who genuinely does have authority, try to overturn it:
+
+```
+Reject expense claim EXP-2026-0008
+```
+
+**What to observe:** `Claim EXP-2026-0008 is already approved — cannot change status.` Only `submitted`
+and `under_review` claims are decidable, so a second approver cannot quietly re-decide a settled claim.
+Verify the whole trail independently — the row carries who decided and when:
+
+```bash
+kubectl exec deployment/frontdeskai -- python -c \
+  "import sqlite3,os; c=sqlite3.connect(os.environ.get('SQLITE_DIR','/shared/.sqlite')+'/frontdesk_tools.db'); \
+   print(c.execute('select claim_id,employee_id,status,reviewed_by,reviewed_at from expense_claims').fetchall())"
+```
+
+### The second gate: leave longer than three days
+
+The same pattern, with a sharper edge. As `rajesh.kumar@unigps.in`, send these one after the other:
+
+```
+I need 3 days of casual leave from 2026-10-05 to 2026-10-07 for a family function
+```
+```
+I need 5 days of casual leave from 2026-11-09 to 2026-11-13 for a family function
+```
+
+**What to observe:** the first is approved outright and the balance drops by 3. The second comes back as
+*"Leave request submitted for manager approval … Requests of more than 3 days require manager approval."*
+Now ask `what is my leave balance?` — the balance has **not** been reduced by the pending five days, and
+the agent lists the request under *Pending leave requests*. The agent is holding state on behalf of a
+human who has not decided yet, and it is careful not to spend the balance in the meantime.
+
+⚠️ **This is where the loop is honestly incomplete, and it is worth showing in the room.** Nothing in the
+application can decide that pending request. There is no tool that updates `leave_requests.status`, no
+approval screen, and no notification — the string *"You'll be notified once reviewed"* describes a
+process that does not exist here. The agent handed the decision to a human and has no way to take it
+back. A production system needs the return path: a queue the approver can see, and a way for their
+decision to re-enter the graph.
+
+(On a deployment where the HR MCP server of Part 9 is reachable, the HR worker prefers
+`approve_leave_via_mcp` and settles requests up to 10 days itself against PostgreSQL, so you will not
+see this gate at all. It is the local SQLite path that stops at three days.)
+
+### The gate that looks like a human gate and is not
+
+Part 5's escalation is the trap. A 15-day leave request sets `needs_escalation`, the graph diverts
+through the **manager** node, and the audit trail says `Hr worker: escalating`. It reads like a handover
+to a person. It is not — the manager node is another LLM with its own prompt and its own tools, and in
+Part 9 it reads a balance and writes an approval to the HR database without a human seeing it.
+
+Calling a node "manager" does not put a human in the loop. The test is not what the node is named or
+what the trail says; it is whether the system can complete the action without a person. By that test
+this app has exactly two human gates — expense approval, and local leave over three days — and both of
+them are enforced in a tool, not in a prompt.
+
+### What a full implementation would add
+
+Worth discussing at this point, because the app is one step away from it: the graph is already compiled
+with a `SqliteSaver` checkpointer keyed on your email address (`app/app.py`), so every conversation's
+state is already durable and resumable. What it does not have is an interrupt point — no node is
+declared with `interrupt_before`, so a run always goes from START to END in one pass and a "pending"
+decision lives in a database row rather than in a paused graph.
+
+The three pieces that would close it:
+
+1. **Pause** — compile with `interrupt_before=["manager"]` so an escalated request stops *inside* the
+   graph instead of answering with a holding message.
+2. **Surface** — a queue the approver can actually see. Today an approver has to be told the claim id by
+   the claimant; there is no `list_claims_awaiting_my_decision` tool, which is the single most obvious
+   thing missing from Steps 3 and 4.
+3. **Resume** — the approver's decision resumes the same thread from the checkpoint, so the employee's
+   original request is answered rather than a new conversation being started about it.
+
+Note which of those is *not* on the list: moving the authority check into the prompt. The reason Steps 2
+and 3 hold is that authority is read from the `employees` table by the tool itself, and no phrasing in
+the conversation reaches it.
+
+---
+
 ## Suggested 60-Minute Path
 
 | Time | Part | The point |
@@ -677,6 +866,7 @@ Details: [observability.md](observability.md) and [langfuse-setup.md](langfuse-s
 | 5 min | 6 | Analytics and account — business questions without a dashboard |
 | 15 min | 7–8 | Self-configuration and the self-teaching loop — **the reason this app exists** |
 | 5 min | 9–10 | MCP reads *and writes*, then Langfuse to read the actual prompts |
+| 5 min | 11 | Human in the loop — the two decisions the agent is not allowed to make |
 
 If you only have ten minutes, do Part 8. If you have fifteen, add Part 3 — together they are the two
 ways this system changes itself without a redeploy.
