@@ -28,6 +28,7 @@ kubectl rollout restart deployment/frontdeskai
 | `amit.patel@unigps.in` | Amit Patel, Finance Lead | Can approve others' expense claims (Part 5) |
 | `vikram.singh@unigps.in` | Vikram Singh, Finance Analyst | Reports to Amit. Has a *rejected* training claim |
 | `neha.gupta@unigps.in` | Neha Gupta, Facilities Coordinator | Has a pending Goa leave request |
+| `sneha.reddy@unigps.in` | Sneha Reddy, Facilities Manager | Neha's manager — sees that request waiting for her in Part 11 |
 | `arjun.nayak@unigps.in` | Arjun Nayak, Engineering Manager | Rajesh's manager — the other approval path |
 | `admin@unigps.in` | Admin | **Required for Parts 7–8** — the only account with `skill_admin` access |
 
@@ -725,6 +726,12 @@ I need 7 days of casual leave from 2026-10-12 to 2026-10-18 for a family functio
 Measured reply: *"Your casual leave request #8 for 7 days … has been submitted and is awaiting manager
 approval. Please quote request #8 if you need to check the status later."*
 
+⚠️ **Your number will not be 8.** Request ids are sequential from the four seeded rows, so it depends on
+how many have been filed on that database — the run that produced these quotes got #8 and the very next
+run on the same database got #9. Turns 3 and 4 below say `#8`; **use the number you were actually
+given.** The number matters more than it looks: before `apply_leave` returned one, the model **invented**
+a plausible id (`#7892`, against a row that was `#7`) because it had nothing real to quote.
+
 **What to observe:** the request number, and the fact that the balance did **not** move. Ask
 `what is my leave balance?` — still 17 casual days, with the seven listed separately as pending. The
 agent is holding the decision open on behalf of a human, and is careful not to spend the balance in the
@@ -790,7 +797,10 @@ kubectl exec deployment/frontdeskai -- python -c \
 
 **What the whole sequence demonstrates:** neither person used a form, a queue screen, or an approval
 workflow product. Both typed a sentence into the same box, and the difference between them was not what
-they typed — it was who the database says they are.
+they typed — it was who the database says they are. Nothing in those four turns named an employee id: the
+employee never said who they were, and the manager never said whose requests to show. Every one of the
+three tools takes its subject from the session and the reporting line, which is why the same four
+sentences behave differently depending on who is logged in.
 
 ⚠️ **There is still no notification.** Rajesh is not told when Arjun decides; he has to ask. Closing that
 is the obvious next exercise, and the app already has the SMTP tool from Part 7 to do it with.
