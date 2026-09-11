@@ -1415,11 +1415,44 @@ def _llm_config_error(provider: str, model_name: str, api_key: str) -> str:
         )
     try:
         from agents import _build_llm
-        _build_llm({"provider": provider, "model": model_name,
-                    "temperature": 0.0, "api_key": api_key})
+        llm = _build_llm({"provider": provider, "model": model_name,
+                          "temperature": 0.0, "api_key": api_key})
     except Exception as e:
         return f"Cannot use {provider}/{model_name}: {type(e).__name__}: {e}. Configuration unchanged."
+
+    probe = _llm_probe_error(llm)
+    if probe:
+        return (
+            f"{provider}/{model_name} could be built but did not answer a test call: {probe}\n"
+            f"Configuration unchanged. Check the model name is one the provider actually serves "
+            f"(get_llm_config shows the one in use), and the API key if you supplied one. "
+            f"If the provider is only briefly unavailable, try again."
+        )
     return ""
+
+
+def _llm_probe_error(llm, timeout: float = 20.0) -> str:
+    """Send the cheapest possible call. Returns '' if the model answered.
+
+    Construction is not proof of a working config: ChatOpenAI accepts ANY model
+    string and only fails on the first real call, so a name the gateway does not
+    serve was saved happily and bricked the app at the next request. One live
+    call is the only check that distinguishes a usable config from a plausible
+    one. It runs in a thread with a wall-clock timeout because the OpenAI client
+    defaults to 600s, and a config tool that hangs the agent for ten minutes is
+    its own outage.
+    """
+    import concurrent.futures
+    ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        ex.submit(llm.invoke, "ping").result(timeout=timeout)
+        return ""
+    except concurrent.futures.TimeoutError:
+        return f"no response within {timeout:.0f}s"
+    except Exception as e:
+        return f"{type(e).__name__}: {e}"
+    finally:
+        ex.shutdown(wait=False)
 
 
 def _get_system_config(key: str) -> str:

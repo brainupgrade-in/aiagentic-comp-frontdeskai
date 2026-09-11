@@ -14,6 +14,19 @@ def setup_db(env):
     _get_db().close()
 
 
+@pytest.fixture(autouse=True)
+def stub_llm_probe(request):
+    """Stub the live probe. change_llm_model now sends a real call before it
+    persists, and the test env's GROQ_API_KEY is fake -- these tests assert on
+    persistence and validation, so the probe is stubbed to 'answered' here.
+    Tests marked live_probe exercise the real one."""
+    if request.node.get_closest_marker("live_probe"):
+        yield
+        return
+    with patch("tools._llm_probe_error", return_value=""):
+        yield
+
+
 @pytest.fixture()
 def as_admin(env):
     """Set current_user_email ContextVar to admin for tool calls."""
@@ -129,3 +142,65 @@ class TestConfigureFallbackLlm:
             })
         assert _get_system_config("llm_fallback_model") == "llama-3.1-8b-instant"
         assert _get_system_config("llm_fallback_provider") == "groq"
+
+
+class TestLlmConfigValidation:
+    """A config that cannot be used must be rejected, never persisted: the
+    primary has nothing to degrade to, and a broken one takes the supervisor
+    down with it -- which is the only route back to these tools."""
+
+    def test_model_that_does_not_answer_is_not_persisted(self, env, as_admin, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")  # construction precedes the probe
+        from tools import change_llm_model, _get_system_config
+        before = _get_system_config("llm_model")
+        with patch("tools._llm_probe_error", return_value="NotFoundError: unknown model"):
+            result = change_llm_model.invoke({
+                "model_name": "qwen3-next:80b", "provider": "litellm",
+            })
+        assert "did not answer" in result
+        assert "unknown model" in result
+        assert _get_system_config("llm_model") == before
+
+    def test_fallback_that_does_not_answer_is_not_persisted(self, env, as_admin):
+        from tools import configure_fallback_llm, _get_system_config
+        before = _get_system_config("llm_fallback_model")
+        with patch("tools._llm_probe_error", return_value="AuthenticationError: 401"):
+            result = configure_fallback_llm.invoke({
+                "model_name": "llama-3.1-8b-instant", "provider": "groq",
+            })
+        assert "did not answer" in result
+        assert _get_system_config("llm_fallback_model") == before
+
+    def test_groq_without_a_key_is_rejected(self, env, as_admin, monkeypatch):
+        """Groq was the one provider with no key check; it was assumed to have
+        GROQ_API_KEY. No deployment of ours sets one."""
+        monkeypatch.delenv("GROQ_API_KEY", raising=False)
+        from tools import change_llm_model, _get_system_config
+        before = _get_system_config("llm_provider")
+        result = change_llm_model.invoke({
+            "model_name": "llama-3.1-8b-instant", "provider": "groq",
+        })
+        assert "requires an API key" in result
+        assert "GROQ_API_KEY" in result
+        assert _get_system_config("llm_provider") == before
+
+    @pytest.mark.live_probe
+    def test_probe_reports_a_timeout_rather_than_hanging(self):
+        """The OpenAI client defaults to a 600s timeout; the probe is bounded."""
+        from tools import _llm_probe_error
+
+        class Slow:
+            def invoke(self, _):
+                import time; time.sleep(5)
+
+        assert "no response within" in _llm_probe_error(Slow(), timeout=0.5)
+
+    @pytest.mark.live_probe
+    def test_probe_returns_empty_when_the_model_answers(self):
+        from tools import _llm_probe_error
+
+        class Fine:
+            def invoke(self, _):
+                return "pong"
+
+        assert _llm_probe_error(Fine()) == ""
