@@ -1241,6 +1241,35 @@ def _is_valid_openrouter_model(name: str) -> bool:
     return "/" in name and len(name) > 3
 
 
+def _llm_config_error(provider: str, model_name: str, api_key: str) -> str:
+    """Return an error string if this provider/model/key cannot be used, else ''.
+
+    Checks the key FIRST so the admin gets a sentence they can act on, then
+    actually constructs the client, because a config that cannot be built is
+    the one failure the app cannot recover from on its own: a broken PRIMARY
+    kills the supervisor, which is the only route back to this tool. Verify
+    before persisting, never after.
+    """
+    env_key = {
+        "groq": "GROQ_API_KEY",
+        "openrouter": "OPENROUTER_API_KEY",
+        "ollama": "OLLAMA_API_KEY",
+    }.get(provider)
+    if env_key and not api_key and not os.getenv(env_key):
+        return (
+            f"{provider} requires an API key. Pass one via the api_key parameter or set "
+            f"{env_key} in the environment. (This deployment reaches its model through the "
+            f"'litellm' provider, which needs no key of its own.)"
+        )
+    try:
+        from agents import _build_llm
+        _build_llm({"provider": provider, "model": model_name,
+                    "temperature": 0.0, "api_key": api_key})
+    except Exception as e:
+        return f"Cannot use {provider}/{model_name}: {type(e).__name__}: {e}. Configuration unchanged."
+    return ""
+
+
 def _get_system_config(key: str) -> str:
     """Read a single value from system_config table."""
     conn = _get_db()
@@ -1337,11 +1366,14 @@ def get_llm_config() -> str:
 
 
 @tool
-def change_llm_model(model_name: str, provider: str = "groq", temperature: float = 0.0, api_key: str = "") -> str:
-    """Change the LLM model used by all agents. provider: 'groq', 'openrouter', 'ollama', or 'litellm'.
-    model_name: e.g. 'llama-3.1-8b-instant' (groq), 'google/gemini-2.0-flash-001' (openrouter), or 'llama3.3:70b' (ollama).
-    api_key: optional — omit to keep using the environment variable (GROQ_API_KEY / OLLAMA_API_KEY).
-    For openrouter and ollama, an API key is required (set via this tool or the respective env var)."""
+def change_llm_model(model_name: str, provider: str = "litellm", temperature: float = 0.0, api_key: str = "") -> str:
+    """Change the LLM model used by all agents. provider: 'litellm' (default), 'groq', 'openrouter', or 'ollama'.
+    Prefer 'litellm' — it is the gateway this deployment is configured for and needs no API key.
+    model_name: e.g. 'qwen36-35b-a3b-lab' (litellm), 'llama-3.1-8b-instant' (groq),
+    'google/gemini-2.0-flash-001' (openrouter), or 'llama3.3:70b' (ollama).
+    api_key: optional — omit to keep using the environment variable.
+    groq, openrouter and ollama each require an API key, via this tool or their env var
+    (GROQ_API_KEY / OPENROUTER_API_KEY / OLLAMA_API_KEY); a config that cannot be built is rejected."""
     from auth import current_user_email
     try:
         email = current_user_email.get()
@@ -1363,11 +1395,9 @@ def change_llm_model(model_name: str, provider: str = "groq", temperature: float
         )
 
     # For openrouter, an API key is required (either passed or from env)
-    if provider == "openrouter" and not api_key and not os.getenv("OPENROUTER_API_KEY"):
-        return "OpenRouter requires an API key. Pass one via api_key parameter or set OPENROUTER_API_KEY env var."
-
-    if provider == "ollama" and not api_key and not os.getenv("OLLAMA_API_KEY"):
-        return "Ollama Cloud requires an API key. Pass one via api_key parameter or set OLLAMA_API_KEY env var."
+    err = _llm_config_error(provider, model_name, api_key)
+    if err:
+        return err
 
     _set_system_config("llm_provider", provider, email)
     _set_system_config("llm_model", model_name, email)
@@ -1390,10 +1420,14 @@ def change_llm_model(model_name: str, provider: str = "groq", temperature: float
 
 
 @tool
-def configure_fallback_llm(model_name: str, provider: str = "ollama", api_key: str = "") -> str:
+def configure_fallback_llm(model_name: str, provider: str = "litellm", api_key: str = "") -> str:
     """Configure a fallback LLM used automatically when the primary hits rate limits or errors.
-    model_name: e.g. 'llama3.3:70b' (ollama), 'llama-3.1-8b-instant' (groq), or 'google/gemini-flash-1.5' (openrouter).
-    provider: 'ollama', 'groq', 'openrouter', or 'litellm'. api_key: optional, leave empty to use env var (OLLAMA_API_KEY).
+    provider: 'litellm' (default), 'groq', 'openrouter', or 'ollama'. Prefer 'litellm' — it is the
+    gateway this deployment is configured for and needs no API key.
+    model_name: e.g. 'qwen36-35b-a3b-lab' (litellm), 'llama-3.1-8b-instant' (groq),
+    'llama3.3:70b' (ollama), or 'google/gemini-flash-1.5' (openrouter).
+    api_key: optional, leave empty to use the provider's env var. A fallback that cannot be
+    built is rejected rather than saved.
     To disable the fallback, call with model_name='none'."""
     from auth import current_user_email
     try:
@@ -1423,11 +1457,9 @@ def configure_fallback_llm(model_name: str, provider: str = "ollama", api_key: s
             "Use 'provider/model' format (e.g. 'google/gemini-flash-1.5', 'anthropic/claude-3.5-haiku')."
         )
 
-    if provider == "openrouter" and not api_key and not os.getenv("OPENROUTER_API_KEY"):
-        return "OpenRouter requires an API key. Pass one via api_key parameter or set OPENROUTER_API_KEY env var."
-
-    if provider == "ollama" and not api_key and not os.getenv("OLLAMA_API_KEY"):
-        return "Ollama Cloud requires an API key. Pass one via api_key parameter or set OLLAMA_API_KEY env var."
+    err = _llm_config_error(provider, model_name, api_key)
+    if err:
+        return err
 
     _set_system_config("llm_fallback_provider", provider, email)
     _set_system_config("llm_fallback_model", model_name, email)
