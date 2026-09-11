@@ -51,6 +51,12 @@ spec:
             # SECRET_KEY / AUTH_PASSWORD, created by deploy-spark.sh.
             - secretRef:
                 name: frontdeskai-secret
+            # The participant's OWN Langfuse project, read by deploy-spark.sh from
+            # the .env at the root of their lab repo clone. Optional: without it the
+            # app runs with no LLM tracing rather than failing to start.
+            - secretRef:
+                name: frontdeskai-langfuse
+                optional: true
           ports:
             - containerPort: 8000
               name: http
