@@ -236,17 +236,18 @@ My VPN keeps dropping when I work from home
 → **This writes.** A new ticket is created with a priority and category the agent chose itself. Ask
 `list my tickets` to see it alongside the seeded ones.
 
-### Applying for leave — the agent as the approving officer
+### Applying for leave — the agent decides what it is allowed to decide
 
 ```
 I need 3 days of casual leave from 2026-09-14 to 2026-09-16 for a family function
 ```
 
-**What to observe in the audit trail:** the HR worker does not just acknowledge the request. It checks
-your balance first, confirms 3 days is within the 5-day no-approval limit, records the approved request,
-and reports the new remaining balance — a read, a policy decision, and a write from one sentence. When
-the HR MCP server is unavailable it degrades to `apply_leave`, which files the request in SQLite for a
-human to review.
+**What to observe in the audit trail:** the HR worker does not just acknowledge the request. It calls
+`apply_leave`, which checks your balance, applies the policy — short requests are approved outright,
+longer ones are filed for your manager — records the request with a number, and reports the new
+remaining balance. A read, a policy decision, and a write from one sentence. Ask for seven days instead
+and the same tool files it as pending rather than approving it; **Part 11** follows that request all the
+way through a human manager and back.
 
 ### Submitting an expense
 
@@ -683,11 +684,121 @@ easy to confuse:
 | Shape | Where | What the human supplies |
 |---|---|---|
 | **Ask before acting** | the clarify node (Part 1) | the missing information |
-| **Stop and hand over** | expense approval, leave over 3 days | the *decision* |
+| **Stop and hand over** | leave over 3 days, expense approval | the *decision* |
 | **Curate afterwards** | 👍/👎 (Part 3), Knowledge Base (Part 2) | the judgement about what was good |
 
-The middle one is the interesting one, because it is the only place where the agent has a tool that
-would finish the job and is refused the use of it.
+The middle one is the interesting one, because it is the only place where the agent holds a tool that
+would finish the job and is refused the use of it. There are two of those gates — leave, and expenses —
+and both are enforced in the tool rather than in the prompt.
+
+### A leave request and its manager, end to end
+
+Four turns, two people, one request. This is the shortest complete human-in-the-loop round trip in the
+app — the agent files, a human decides, the agent reports back.
+
+```mermaid
+sequenceDiagram
+    participant E as Rajesh (employee)
+    participant A as HR agent
+    participant DB as leave_requests
+    participant M as Arjun (his manager)
+    E->>A: I need 7 days casual leave
+    A->>DB: apply_leave — over 3 days, so pending
+    A-->>E: Request #8 filed, awaiting your manager
+    M->>A: anything pending from my team?
+    A->>DB: list_pending_leave_requests (manager_id = arjun)
+    A-->>M: Request #8 — Rajesh, 7 days, 12-18 Oct
+    M->>A: approve request #8
+    A->>DB: approve_leave_request — authority checked, balance deducted
+    A-->>M: Approved. Rajesh has 10 casual days left
+    E->>A: what is the status of my request?
+    A->>DB: list_my_leave_requests
+    A-->>E: Request #8 approved by Arjun Nayak
+```
+
+**Turn 1 — the employee asks.** As `rajesh.kumar@unigps.in`:
+
+```
+I need 7 days of casual leave from 2026-10-12 to 2026-10-18 for a family function
+```
+
+Measured reply: *"Your casual leave request #8 for 7 days … has been submitted and is awaiting manager
+approval. Please quote request #8 if you need to check the status later."*
+
+**What to observe:** the request number, and the fact that the balance did **not** move. Ask
+`what is my leave balance?` — still 17 casual days, with the seven listed separately as pending. The
+agent is holding the decision open on behalf of a human, and is careful not to spend the balance in the
+meantime. Anything up to three days would have been approved on the spot; over that, the tool files it.
+
+**Turn 2 — the manager asks what is waiting.** Log out, log in as `arjun.nayak@unigps.in` — Rajesh's
+manager in the `employees` table:
+
+```
+Are there any pending leave requests from my team?
+```
+
+Measured reply: *"There is one pending leave request from your team: Request #8 from Rajesh Kumar for 7
+days of casual leave from 2026-10-12 to 2026-10-18."*
+
+**What to observe:** the manager never said whose requests, or named a team. `list_pending_leave_requests`
+takes **no arguments** — it resolves the team from `employees.manager_id` using the session identity, so
+it is structurally incapable of showing one manager another manager's queue. Log in as
+`priya.sharma@unigps.in` and ask the same thing: *"no pending leave requests from your team"* — her one
+report has nothing pending. Then try `sneha.reddy@unigps.in`, who manages Neha Gupta: she sees the
+seeded Goa request, #3, with no setup at all.
+
+**Turn 3 — the manager decides.** Still as Arjun:
+
+```
+Approve leave request #8
+```
+
+Measured reply: *"Leave request #8 for Rajesh Kumar has been successfully approved … their remaining
+casual leave balance is 10 days."* The days are deducted **now**, at the decision, not when the request
+was filed — and the balance is re-checked at that moment, so a request that was affordable in October
+is refused in December if the days have been spent since.
+
+Try it from the wrong account and watch it hold. As `priya.sharma@unigps.in`:
+
+```
+Approve leave request #3
+```
+
+Refused — Neha reports to Sneha, not to Priya. The three rules are the same shape as the expense rules
+and are read from the `employees` table by the tool, never from the conversation:
+
+| Who tries | Result |
+|---|---|
+| the requester | refused — nobody decides their own leave |
+| a manager who is not *their* manager | refused |
+| the requester's own manager | decided, and recorded in `approved_by` |
+
+**Turn 4 — the employee reads it back.** Log back in as `rajesh.kumar@unigps.in`:
+
+```
+What is the status of my leave request?
+```
+
+Measured reply: *"Request #8 for 7 days of casual leave … has been approved by Arjun Nayak."* The
+employee learns who decided, not just what was decided. Verify the row independently:
+
+```bash
+kubectl exec deployment/frontdeskai -- python -c \
+  "import sqlite3,os; c=sqlite3.connect(os.environ.get('SQLITE_DIR','/shared/.sqlite')+'/frontdesk_tools.db'); \
+   print(c.execute('select id,employee_id,days,status,approved_by from leave_requests').fetchall())"
+```
+
+**What the whole sequence demonstrates:** neither person used a form, a queue screen, or an approval
+workflow product. Both typed a sentence into the same box, and the difference between them was not what
+they typed — it was who the database says they are.
+
+⚠️ **There is still no notification.** Rajesh is not told when Arjun decides; he has to ask. Closing that
+is the obvious next exercise, and the app already has the SMTP tool from Part 7 to do it with.
+
+### The same boundary in finance: an expense claim
+
+Leave is decided by the reporting line. Money is decided by the reporting line **or** by finance
+seniority, which makes the authority rules worth walking separately.
 
 ```mermaid
 flowchart TD
@@ -790,34 +901,6 @@ kubectl exec deployment/frontdeskai -- python -c \
    print(c.execute('select claim_id,employee_id,status,reviewed_by,reviewed_at from expense_claims').fetchall())"
 ```
 
-### The second gate: leave longer than three days
-
-The same pattern, with a sharper edge. As `rajesh.kumar@unigps.in`, send these one after the other:
-
-```
-I need 3 days of casual leave from 2026-10-05 to 2026-10-07 for a family function
-```
-```
-I need 5 days of casual leave from 2026-11-09 to 2026-11-13 for a family function
-```
-
-**What to observe:** the first is approved outright and the balance drops by 3. The second comes back as
-*"Leave request submitted for manager approval … Requests of more than 3 days require manager approval."*
-Now ask `what is my leave balance?` — the balance has **not** been reduced by the pending five days, and
-the agent lists the request under *Pending leave requests*. The agent is holding state on behalf of a
-human who has not decided yet, and it is careful not to spend the balance in the meantime.
-
-⚠️ **This is where the loop is honestly incomplete, and it is worth showing in the room.** Nothing in the
-application can decide that pending request. There is no tool that updates `leave_requests.status`, no
-approval screen, and no notification — the string *"You'll be notified once reviewed"* describes a
-process that does not exist here. The agent handed the decision to a human and has no way to take it
-back. A production system needs the return path: a queue the approver can see, and a way for their
-decision to re-enter the graph.
-
-(On a deployment where the HR MCP server of Part 9 is reachable, the HR worker prefers
-`approve_leave_via_mcp` and settles requests up to 10 days itself against PostgreSQL, so you will not
-see this gate at all. It is the local SQLite path that stops at three days.)
-
 ### The gate that looks like a human gate and is not
 
 Part 5's escalation is the trap. A 15-day leave request sets `needs_escalation`, the graph diverts
@@ -842,9 +925,10 @@ The three pieces that would close it:
 
 1. **Pause** — compile with `interrupt_before=["manager"]` so an escalated request stops *inside* the
    graph instead of answering with a holding message.
-2. **Surface** — a queue the approver can actually see. Today an approver has to be told the claim id by
-   the claimant; there is no `list_claims_awaiting_my_decision` tool, which is the single most obvious
-   thing missing from Steps 3 and 4.
+2. **Surface** — a queue the approver can actually see. Leave has one
+   (`list_pending_leave_requests`, resolved from the reporting line); **expenses do not**, so an
+   approver still has to be told the claim id by the claimant. That asymmetry is worth noticing: the
+   same system draws the same boundary twice and only made it usable once.
 3. **Resume** — the approver's decision resumes the same thread from the checkpoint, so the employee's
    original request is answered rather than a new conversation being started about it.
 

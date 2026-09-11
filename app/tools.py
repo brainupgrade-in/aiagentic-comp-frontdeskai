@@ -455,6 +455,10 @@ def _next_claim_id(conn: sqlite3.Connection) -> str:
 
 # ========== HR TOOLS ==========
 
+# Explicit mapping — never construct column names from input
+_LEAVE_COLUMNS = {"casual": "casual_leave", "sick": "sick_leave", "earned": "earned_leave", "wfh": "wfh_days"}
+
+
 def _get_current_employee_id() -> str:
     """Get the current user's employee_id from the context variable."""
     from auth import current_user_email
@@ -529,8 +533,6 @@ def apply_leave(leave_type: str, start_date: str, end_date: str, reason: str = "
         if not row:
             return f"Employee '{employee_id}' not found in the system."
 
-        # Explicit mapping — never construct column names from input
-        _LEAVE_COLUMNS = {"casual": "casual_leave", "sick": "sick_leave", "earned": "earned_leave", "wfh": "wfh_days"}
         col = _LEAVE_COLUMNS[leave_type]  # safe: leave_type already validated above
         available = row[col]
         if days > available:
@@ -554,11 +556,12 @@ def apply_leave(leave_type: str, start_date: str, end_date: str, reason: str = "
         auto_approve = days <= 3
         status = "approved" if auto_approve else "pending"
 
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO leave_requests (employee_id, leave_type, start_date, end_date, days, reason, status) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (employee_id, leave_type, start_date, end_date, days, reason, status),
         )
+        request_id = cur.lastrowid
 
         if auto_approve:
             conn.execute(
@@ -568,18 +571,167 @@ def apply_leave(leave_type: str, start_date: str, end_date: str, reason: str = "
             )
             remaining = available - days
             result = (
-                f"Leave approved! {days} day(s) of {leave_type} leave from {start_date} to {end_date}.\n"
+                f"Leave approved! Request #{request_id}: {days} day(s) of {leave_type} leave "
+                f"from {start_date} to {end_date}.\n"
                 f"Remaining {leave_type}: {remaining} days."
             )
         else:
             result = (
-                f"Leave request submitted for manager approval: {days} day(s) of {leave_type} leave "
-                f"from {start_date} to {end_date}.\n"
-                f"Requests of more than 3 days require manager approval. You'll be notified once reviewed."
+                f"Leave request #{request_id} submitted for manager approval: {days} day(s) of "
+                f"{leave_type} leave from {start_date} to {end_date}.\n"
+                f"Requests of more than 3 days require manager approval. Quote request "
+                f"#{request_id} when you ask about it."
             )
 
         conn.commit()
         return result
+    finally:
+        conn.close()
+
+
+@tool
+def list_pending_leave_requests() -> str:
+    """List leave requests from your direct reports that are waiting for your decision.
+
+    Takes no arguments — the team is resolved from the employees table using the
+    caller's session identity, so a manager only ever sees their own reports.
+    """
+    manager_id = _get_current_employee_id()
+    conn = _get_db()
+    try:
+        rows = conn.execute(
+            "SELECT lr.id, lr.leave_type, lr.start_date, lr.end_date, lr.days, lr.reason, "
+            "lr.created_at, e.full_name, e.employee_id "
+            "FROM leave_requests lr "
+            "JOIN employees e ON lr.employee_id = e.employee_id "
+            "WHERE e.manager_id = ? AND lr.status = 'pending' "
+            "ORDER BY lr.created_at",
+            (manager_id,),
+        ).fetchall()
+        if not rows:
+            return "No leave requests from your team are waiting for your decision."
+
+        lines = [f"Leave requests awaiting your decision ({len(rows)}):"]
+        for r in rows:
+            lines.append(
+                f"  Request #{r['id']} — {r['full_name']} ({r['employee_id']}): "
+                f"{r['days']} day(s) {r['leave_type']} leave, {r['start_date']} to {r['end_date']}"
+            )
+            lines.append(
+                f"      Reason: {r['reason'] or '(none given)'}    Submitted: {r['created_at']}"
+            )
+        lines.append("Approve or reject one by its request number.")
+        return "\n".join(lines)
+    finally:
+        conn.close()
+
+
+@tool
+def approve_leave_request(request_id: int, status: str) -> str:
+    """Approve or reject a pending leave request from your team. status: 'approved' or 'rejected'.
+
+    The approver is always the logged-in employee — it cannot be supplied as an
+    argument. Only the requester's own manager may decide their leave, and nobody
+    may decide their own. Approving deducts the days from the requester's balance.
+    """
+    if status not in ("approved", "rejected"):
+        return "Status must be 'approved' or 'rejected'."
+
+    approver_id = _get_current_employee_id()
+
+    conn = _get_db()
+    try:
+        row = conn.execute(
+            "SELECT lr.id, lr.employee_id, lr.leave_type, lr.start_date, lr.end_date, lr.days, "
+            "lr.status, e.full_name, e.manager_id "
+            "FROM leave_requests lr "
+            "JOIN employees e ON lr.employee_id = e.employee_id "
+            "WHERE lr.id = ?",
+            (request_id,),
+        ).fetchone()
+        if not row:
+            return f"Leave request #{request_id} not found."
+        if row["status"] != "pending":
+            return f"Leave request #{request_id} is already {row['status']} — cannot change status."
+        if row["employee_id"] == approver_id:
+            return "You cannot approve or reject your own leave request."
+        if row["manager_id"] != approver_id:
+            return (
+                f"You are not authorised to decide this request. Only {row['full_name']}'s "
+                "own manager can approve or reject it."
+            )
+
+        if status == "approved":
+            col = _LEAVE_COLUMNS[row["leave_type"]]  # safe: constrained by the table's CHECK
+            balance = conn.execute(
+                "SELECT * FROM leave_balances WHERE employee_id = ?", (row["employee_id"],)
+            ).fetchone()
+            # Re-check at decision time: the balance may have moved since the request was filed.
+            available = balance[col] if balance else 0
+            if row["days"] > available:
+                return (
+                    f"Cannot approve request #{request_id}: {row['full_name']} has only "
+                    f"{available} day(s) of {row['leave_type']} leave left but the request is for "
+                    f"{row['days']}. Ask them to amend or cancel it."
+                )
+            conn.execute(
+                f"UPDATE leave_balances SET {col} = {col} - ?, updated_at = datetime('now') "
+                "WHERE employee_id = ?",
+                (row["days"], row["employee_id"]),
+            )
+
+        conn.execute(
+            "UPDATE leave_requests SET status = ?, approved_by = ?, updated_at = datetime('now') "
+            "WHERE id = ?",
+            (status, approver_id, request_id),
+        )
+        conn.commit()
+
+        if status == "rejected":
+            return (
+                f"Leave request #{request_id} ({row['full_name']}, {row['days']} day(s) "
+                f"{row['leave_type']} leave from {row['start_date']}) has been rejected by {approver_id}."
+            )
+        remaining = available - row["days"]
+        return (
+            f"Leave request #{request_id} approved by {approver_id}: {row['full_name']} — "
+            f"{row['days']} day(s) {row['leave_type']} leave from {row['start_date']} to "
+            f"{row['end_date']}.\nTheir remaining {row['leave_type']} balance is {remaining} days."
+        )
+    finally:
+        conn.close()
+
+
+@tool
+def list_my_leave_requests() -> str:
+    """List the current employee's own leave requests with their status and who decided them."""
+    employee_id = _get_current_employee_id()
+    conn = _get_db()
+    try:
+        rows = conn.execute(
+            "SELECT lr.id, lr.leave_type, lr.start_date, lr.end_date, lr.days, lr.status, "
+            "lr.updated_at, a.full_name AS approver_name "
+            "FROM leave_requests lr "
+            "LEFT JOIN employees a ON lr.approved_by = a.employee_id "
+            "WHERE lr.employee_id = ? "
+            "ORDER BY lr.id DESC",
+            (employee_id,),
+        ).fetchall()
+        if not rows:
+            return f"No leave requests found for '{employee_id}'."
+
+        lines = [f"Leave requests for {employee_id} ({len(rows)} total):"]
+        for r in rows:
+            line = (
+                f"  Request #{r['id']}: {r['days']} day(s) {r['leave_type']} leave, "
+                f"{r['start_date']} to {r['end_date']} — {r['status']}"
+            )
+            if r["status"] == "pending":
+                line += " (waiting for your manager)"
+            elif r["approver_name"]:
+                line += f" by {r['approver_name']} on {r['updated_at']}"
+            lines.append(line)
+        return "\n".join(lines)
     finally:
         conn.close()
 
@@ -1826,7 +1978,11 @@ def approve_leave_via_mcp(
         )
 
 
-HR_TOOLS = [get_leave_balance_from_hr_system, approve_leave_via_mcp, get_leave_balance, apply_leave]
+HR_TOOLS = [
+    get_leave_balance_from_hr_system, approve_leave_via_mcp,
+    get_leave_balance, apply_leave,
+    list_my_leave_requests, list_pending_leave_requests, approve_leave_request,
+]
 
 # Tools available to the manager agent — approve escalated leave requests
 MANAGER_TOOLS = [get_leave_balance_from_hr_system, approve_leave_via_mcp]
