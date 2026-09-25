@@ -237,11 +237,11 @@ CREATE TABLE IF NOT EXISTS employees (
     """)
     # Seed defaults (idempotent)
     # Seeded from the environment so a deployment picks the provider without a
-    # code change; unset env keeps the historical Ollama -> Groq pairing. These
-    # rows win over agents.py's module defaults, so both must read the same env.
+    # code change. These rows win over agents.py's module defaults, so both must
+    # read the same env. Default to litellm + workshop gateway model.
     config_defaults = [
-        ("llm_provider",    os.getenv("LLM_PROVIDER", "ollama")),
-        ("llm_model",       os.getenv("LLM_MODEL", "gemma3:12b")),
+        ("llm_provider",    os.getenv("LLM_PROVIDER", "litellm")),
+        ("llm_model",       os.getenv("LLM_MODEL", "qwen36-35b-a3b-lab")),
         ("llm_temperature", "0"),
         ("llm_api_key",     ""),
         ("llm_fallback_provider",    os.getenv("LLM_FALLBACK_PROVIDER", "groq")),
@@ -1557,8 +1557,8 @@ def _decrypt_value(ciphertext: str) -> str:
 @tool
 def get_llm_config() -> str:
     """Get the current LLM configuration (primary and fallback)."""
-    provider = _get_system_config("llm_provider") or "ollama"
-    model = _get_system_config("llm_model") or "gemma3:12b"
+    provider = _get_system_config("llm_provider") or "litellm"
+    model = _get_system_config("llm_model") or "qwen36-35b-a3b-lab"
     temp = _get_system_config("llm_temperature") or "0"
     api_key = _get_system_config("llm_api_key") or ""
     key_status = f"custom key configured ({_mask_api_key(api_key)})" if api_key else "using environment variable"

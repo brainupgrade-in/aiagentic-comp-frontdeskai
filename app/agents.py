@@ -31,10 +31,10 @@ from skills import get_skill_tools
 
 # Defaults come from the environment so a deployment can pick the provider
 # without touching code — the sandbox sets LLM_PROVIDER=litellm in a ConfigMap.
-# Unset env keeps the historical Ollama Cloud -> Groq pairing.
+# Unset env defaults to litellm + workshop gateway model (qwen36-35b-a3b-lab).
 _llm_config = {
-    "provider": os.getenv("LLM_PROVIDER", "ollama"),
-    "model": os.getenv("LLM_MODEL", "gemma4:cloud"),
+    "provider": os.getenv("LLM_PROVIDER", "litellm"),
+    "model": os.getenv("LLM_MODEL", "qwen36-35b-a3b-lab"),
     "temperature": 0.0,
     "api_key": "",  # empty = use the provider's env var
 }
