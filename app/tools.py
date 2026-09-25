@@ -457,6 +457,10 @@ def _next_claim_id(conn: sqlite3.Connection) -> str:
 
 # Explicit mapping — never construct column names from input
 _LEAVE_COLUMNS = {"casual": "casual_leave", "sick": "sick_leave", "earned": "earned_leave", "wfh": "wfh_days"}
+_LEAVE_BALANCE_UPDATES = {
+    key: f"UPDATE leave_balances SET {col} = {col} - ?, updated_at = datetime('now') WHERE employee_id = ?"
+    for key, col in _LEAVE_COLUMNS.items()
+}
 
 
 def _get_current_employee_id() -> str:
@@ -566,8 +570,7 @@ def apply_leave(leave_type: str, start_date: str, end_date: str, reason: str = "
 
         if auto_approve:
             conn.execute(
-                f"UPDATE leave_balances SET {col} = {col} - ?, updated_at = datetime('now') "
-                "WHERE employee_id = ?",
+                _LEAVE_BALANCE_UPDATES[leave_type],
                 (days, employee_id),
             )
             remaining = available - days
@@ -676,8 +679,7 @@ def approve_leave_request(request_id: int, status: str) -> str:
                     f"{row['days']}. Ask them to amend or cancel it."
                 )
             conn.execute(
-                f"UPDATE leave_balances SET {col} = {col} - ?, updated_at = datetime('now') "
-                "WHERE employee_id = ?",
+                _LEAVE_BALANCE_UPDATES[row["leave_type"]],
                 (row["days"], row["employee_id"]),
             )
 
