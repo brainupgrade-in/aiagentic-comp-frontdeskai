@@ -39,9 +39,9 @@ _llm_config = {
     "api_key": "",  # empty = use the provider's env var
 }
 _llm_fallback_config = {
-    "provider": os.getenv("LLM_FALLBACK_PROVIDER", "groq"),
+    "provider": os.getenv("LLM_FALLBACK_PROVIDER", "litellm"),
     # empty model disables the fallback (get_fallback_llm returns None)
-    "model": os.getenv("LLM_FALLBACK_MODEL", "llama-3.3-70b-versatile"),
+    "model": os.getenv("LLM_FALLBACK_MODEL", "gemma4-31b-turbo-lab"),
     "temperature": 0.0,
     "api_key": "",  # empty = use the provider's env var
 }
