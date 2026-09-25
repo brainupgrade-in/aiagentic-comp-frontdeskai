@@ -1152,9 +1152,37 @@ def qa_check(state: SupportRequest) -> dict:
                 "audit": [f"[{ts}] QA PASS (PII redacted: {', '.join(pii_found)})"],
             }
         feedback = "; ".join(issues)
+
+        # Build a user-friendly message explaining what was blocked and why.
+        # These guidance strings surface clearly in the final chat response
+        # (see finalize in agents.py) so users understand the rejection
+        # instead of seeing a silent or confusing failure.
+        user_guidance = ""
+        if "PII detected" in feedback:
+            user_guidance = (
+                " (We removed sensitive personal information from the response. "
+                "To avoid this, please don't share personal IDs, bank details, or "
+                "financial account numbers in your requests.)"
+            )
+        elif "empty response" in feedback:
+            user_guidance = (
+                " (The system was unable to generate a response. "
+                "Please rephrase your request or try again.)"
+            )
+        elif "too short" in feedback:
+            user_guidance = (
+                " (The system produced a very brief response. "
+                "Please provide more details about your request.)"
+            )
+        elif "unhelpful" in feedback:
+            user_guidance = (
+                " (The system could not find relevant information to answer your "
+                "request. Please provide more context or rephrase your question.)"
+            )
+
         return {
             "worker_output": redacted_output,
-            "qa_feedback": feedback,
+            "qa_feedback": feedback + user_guidance,
             "error": feedback,
             "audit": [f"[{ts}] QA FAIL: {feedback}"],
         }
