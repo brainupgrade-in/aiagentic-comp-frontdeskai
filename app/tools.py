@@ -241,7 +241,7 @@ CREATE TABLE IF NOT EXISTS employees (
     # rows win over agents.py's module defaults, so both must read the same env.
     config_defaults = [
         ("llm_provider",    os.getenv("LLM_PROVIDER", "ollama")),
-        ("llm_model",       os.getenv("LLM_MODEL", "gemma3:12b")),
+        ("llm_model",       os.getenv("LLM_MODEL", "gemma4:cloud")),
         ("llm_temperature", "0"),
         ("llm_api_key",     ""),
         ("llm_fallback_provider",    os.getenv("LLM_FALLBACK_PROVIDER", "groq")),
